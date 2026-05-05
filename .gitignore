@@ -1,0 +1,16 @@
+# Large data / outputs
+lau_dataset/
+phase2_output/
+weight/
+logs/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Logs and temp
+*.log
+nohup.out
+
+# Conda env
+.conda/
