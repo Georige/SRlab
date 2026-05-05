@@ -89,6 +89,10 @@ class PolarMoE(nn.Module):
 
     Gate: smooth interpolation based on normalized y-coordinate.
     Residual: output = blend(exp0, exp1) + x.
+
+    Load balancing: tracks per-expert output magnitude during forward(),
+    exposes load_balance_loss() as CV² penalty to prevent one expert
+    from dominating the other (collapse).
     """
 
     def __init__(self, ch):
@@ -101,6 +105,8 @@ class PolarMoE(nn.Module):
             nn.GroupNorm(min(8, ch), ch), nn.SiLU(),
             nn.Conv2d(ch, ch, 3, padding=1),
         )
+        self._eq_norm = 0.0
+        self._pole_norm = 0.0
 
     def forward(self, x):
         B, C, H, W = x.shape
@@ -109,4 +115,20 @@ class PolarMoE(nn.Module):
         gate = (1.0 - torch.sin(torch.pi * y / H)).view(1, 1, H, 1)  # [1,1,H,1]
         eq = self.expert_eq(x)
         pole = self.expert_pole(x)
+        # Track RMS per-channel activation for load balancing
+        self._eq_norm = eq.pow(2).mean().sqrt().item()
+        self._pole_norm = pole.pow(2).mean().sqrt().item()
         return (1.0 - gate) * eq + gate * pole + x
+
+    def load_balance_loss(self):
+        """Coefficient-of-variation² penalty on per-expert output magnitude.
+
+        Returns 0 when both experts contribute equally (CV=0).
+        Approaches 1 when one expert dominates completely.
+        """
+        a, b = self._eq_norm, self._pole_norm
+        mean = (a + b) / 2.0
+        if mean < 1e-8:
+            return 0.0
+        var = ((a - mean)**2 + (b - mean)**2) / 2.0
+        return var / (mean**2)

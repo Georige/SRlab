@@ -20,6 +20,7 @@ from tqdm import tqdm
 from utility.data import PanoramaDataset
 from model.unet import PixelUNet
 from model.diffusion import PixelDiffusion
+from vit.overfit_plot import update_curves, make_progression
 
 
 def main(gpu: int = 0, exp_name: str = "overfit_base", config_module: str = "diffusion_config"):
@@ -93,6 +94,10 @@ def main(gpu: int = 0, exp_name: str = "overfit_base", config_module: str = "dif
           f"SphUNet=({cfg.USE_CIRCULAR_CONV},{cfg.USE_COORD_EMBED},{cfg.USE_SPHERICAL_ATTN})")
     print(f"Output: {output_dir}")
 
+    losses = []
+    sample_epochs = []
+    sample_mses = []
+
     pbar = tqdm(range(1, 1001), desc=f"[{exp_name}]", unit="ep")
     for epoch in pbar:
         diffusion.train()
@@ -100,17 +105,26 @@ def main(gpu: int = 0, exp_name: str = "overfit_base", config_module: str = "dif
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
+        losses.append(loss.item())
 
         # Sample every 100 epochs (and at epoch 1)
         if epoch == 1 or epoch % 100 == 0 or epoch == 1000:
             diffusion.eval()
             with torch.no_grad():
                 sr = diffusion.sample(lr_img, steps=cfg.INFER_STEPS)
+            v_mse = F.mse_loss(sr, hr_img).item()
+            sample_epochs.append(epoch)
+            sample_mses.append(v_mse)
             to_pil(sr).save(os.path.join(output_dir, f"e{epoch:04d}.png"))
-            pbar.set_postfix(train=f"{loss.item():.4f}",
-                             v_img=f"{F.mse_loss(sr, hr_img).item():.4f}")
+
+            update_curves(exp_name, losses, sample_epochs, sample_mses)
+            make_progression(output_dir)
+            pbar.set_postfix(train=f"{loss.item():.4f}", v_img=f"{v_mse:.4f}")
         else:
             pbar.set_postfix(train=f"{loss.item():.4f}")
+
+
+    print(f"\nFinal: train={losses[-1]:.6f}, best_v_img={min(sample_mses):.6f} (epoch {sample_epochs[sample_mses.index(min(sample_mses))]})")
 
 
 if __name__ == "__main__":

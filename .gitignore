@@ -8,6 +8,9 @@ logs/
 __pycache__/
 *.pyc
 
+# Images
+*.png
+
 # Logs and temp
 *.log
 nohup.out

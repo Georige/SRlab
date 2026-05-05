@@ -27,7 +27,9 @@ class PixelUNet(nn.Module):
                  use_circular_conv=False,
                  use_coord_embed=False,
                  use_spherical_attn=False,
-                 hr_size=(512, 1024)):
+                 hr_size=(512, 1024),
+                 ms_injection='add',          # 'none', 'add', 'scaled_add', 'film'
+                 ms_scale_init=1.0):          # initial value for learnable scale
         super().__init__()
         self.time_emb = TimeEmbedding(time_dim)
         self.use_polar_moe = use_polar_moe
@@ -35,6 +37,7 @@ class PixelUNet(nn.Module):
         self.use_circular_conv = use_circular_conv
         self.use_coord_embed = use_coord_embed
         self.use_spherical_attn = use_spherical_attn
+        self.ms_injection = ms_injection
 
         # CoordEmbed: spherical position encoding as extra input channels
         if use_coord_embed:
@@ -60,12 +63,33 @@ class PixelUNet(nn.Module):
         else:
             self.spherical_attn = None
 
-        # Multi-scale ISHT condition projectors: 3ch → feature_ch (additive)
-        self.ms_proj = nn.ModuleDict({
-            'enc2': nn.Conv2d(3, base_ch, 1),          # 256×512 level
-            'enc4': nn.Conv2d(3, base_ch * 2, 1),      # 128×256 level
-            'enc8': nn.Conv2d(3, base_ch * 4, 1),      # 64×128 bottleneck
-        })
+        # Multi-scale ISHT condition injection
+        self.ms_proj = None
+        self.ms_scales = None
+        self.ms_film = None
+
+        if ms_injection == 'none':
+            pass  # no ISHT injection at all
+        elif ms_injection == 'film':
+            # FiLM: generate per-channel scale (γ) and shift (β) from ISHT features
+            self.ms_film = nn.ModuleDict({
+                'enc2': nn.Conv2d(3, base_ch * 2, 1),       # 3ch → (γ,β) for 32ch
+                'enc4': nn.Conv2d(3, base_ch * 2 * 2, 1),   # 3ch → (γ,β) for 64ch
+                'enc8': nn.Conv2d(3, base_ch * 4 * 2, 1),   # 3ch → (γ,β) for 128ch
+            })
+        else:
+            # 'add' (default) or 'scaled_add': project ISHT to feature space, then add
+            self.ms_proj = nn.ModuleDict({
+                'enc2': nn.Conv2d(3, base_ch, 1),
+                'enc4': nn.Conv2d(3, base_ch * 2, 1),
+                'enc8': nn.Conv2d(3, base_ch * 4, 1),
+            })
+            if ms_injection == 'scaled_add':
+                self.ms_scales = nn.ParameterDict({
+                    'enc2': nn.Parameter(torch.tensor(ms_scale_init)),
+                    'enc4': nn.Parameter(torch.tensor(ms_scale_init)),
+                    'enc8': nn.Parameter(torch.tensor(ms_scale_init)),
+                })
 
         # Polar MoE: 2-expert gated by row coordinate per encoder level
         if use_polar_moe:
@@ -103,6 +127,36 @@ class PixelUNet(nn.Module):
                 nn.Conv2d(base_ch, in_ch, 3, padding=1),
             )
 
+    def _inject_ms(self, x, ms_isht, key):
+        """Apply multi-scale ISHT injection at a given encoder level.
+
+        Args:
+            x: feature map [B, C, H', W']
+            ms_isht: dict of ISHT images or None
+            key: injection level key ('enc2', 'enc4', 'enc8')
+
+        Injection modes:
+            'none':         no-op
+            'add':          x = x + Conv1×1(ISHT_img)          (default)
+            'scaled_add':   x = x + scale * Conv1×1(ISHT_img)  (learnable scale)
+            'film':         x = γ(ISHT) * x + β(ISHT)          (FiLM modulation)
+        """
+        if self.ms_injection == 'none' or not ms_isht or key not in ms_isht:
+            return x
+
+        isht_feat = ms_isht[key]
+
+        if self.ms_injection == 'film':
+            film_out = self.ms_film[key](isht_feat)
+            gamma, beta = film_out.chunk(2, dim=1)
+            return gamma * x + beta
+        else:
+            # 'add' or 'scaled_add'
+            proj = self.ms_proj[key](isht_feat)
+            if self.ms_injection == 'scaled_add':
+                proj = self.ms_scales[key] * proj
+            return x + proj
+
     def forward(self, noisy, cond, t_norm, ms_isht=None):
         x = torch.cat([noisy, cond], dim=1)    # [B, in_ch+cond_ch, H, W]
         if self.use_coord_embed:
@@ -110,20 +164,17 @@ class PixelUNet(nn.Module):
         t_emb = self.time_emb(t_norm)          # [B, time_dim]
 
         s1, x = self.enc1(x, t_emb)
-        if ms_isht and 'enc2' in ms_isht:
-            x = x + self.ms_proj['enc2'](ms_isht['enc2'])
+        x = self._inject_ms(x, ms_isht, 'enc2')
         if self.use_polar_moe:
             x = self.polar_moe['enc1'](x)
 
         s2, x = self.enc2(x, t_emb)
-        if ms_isht and 'enc4' in ms_isht:
-            x = x + self.ms_proj['enc4'](ms_isht['enc4'])
+        x = self._inject_ms(x, ms_isht, 'enc4')
         if self.use_polar_moe:
             x = self.polar_moe['enc2'](x)
 
         s3, x = self.enc3(x, t_emb)
-        if ms_isht and 'enc8' in ms_isht:
-            x = x + self.ms_proj['enc8'](ms_isht['enc8'])
+        x = self._inject_ms(x, ms_isht, 'enc8')
 
         x = self.bottleneck(x, t_emb)
         if self.use_spherical_attn:
@@ -141,3 +192,13 @@ class PixelUNet(nn.Module):
         if self.use_laplacian:
             return pred_full, pred_L1, pred_L2
         return pred_full
+
+    def load_balance_loss(self):
+        """Sum of CV² penalties across all PolarMoE modules.
+
+        Returns 0 if PolarMoE is disabled. Call after forward() to get
+        the load-balancing loss for the most recent batch.
+        """
+        if self.polar_moe is None:
+            return 0.0
+        return sum(moe.load_balance_loss() for moe in self.polar_moe.values())
