@@ -1,0 +1,41 @@
+# Phase 7 Stage 1: Teacher Forcing upper bound diagnostic
+#
+# Loads Stage 0 best model (200 epochs), runs validation with GT crops as
+# known_high_res instead of model predictions. This measures the ceiling:
+# if the model had perfect conditioning at every step, how well would it do?
+#
+# Purpose: distinguish between capacity bottleneck vs autoregressive error
+# accumulation.
+experiment:
+  name: phase7_s1_tf_bound
+  phase: phase7
+  stage: stage1
+  desc: "TF upper bound: load S0 best model, validate with GT crops as condition"
+  trainer: center_growing
+
+model:
+  type: center_growing
+  in_ch: 10
+  out_ch: 3
+  base_ch: 32
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 1
+  use_residual: true
+  teacher_noise_std: 0.0
+  val_tf: true
+  resume_ckpt: phase7_output/phase7_stage0_cg_pixel/best_model.pt
+  start_epoch: 200
+
+output:
+  dir: phase7_output
+  log_dir: phase7_output/logs

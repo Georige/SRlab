@@ -305,7 +305,7 @@ def validate_bicubic(val_data):
 # Main
 # ============================================================
 
-def run(gpu=7, epochs=TRAIN_EPOCHS):
+def run(gpu=7, epochs=TRAIN_EPOCHS, resume_ckpt=None, start_epoch=0):
     device = torch.device(f"cuda:{gpu}" if torch.cuda.is_available() else "cpu")
     exp_dir = os.path.join(OUTPUT_DIR, EXP_NAME)
     os.makedirs(exp_dir, exist_ok=True)
@@ -313,11 +313,12 @@ def run(gpu=7, epochs=TRAIN_EPOCHS):
     print(f"[{EXP_NAME}] Loading {N_TOTAL} panoramas...")
     train_data, val_data, sht_cond, isht_cond, ms_sht_isht_pairs = build_dataset(device)
 
-    # Save reference images
-    ref_item = val_data[0]
-    to_pil(ref_item['hr']).save(os.path.join(exp_dir, "val_hr.png"))
-    to_pil(ref_item['lr_up']).save(os.path.join(exp_dir, "val_bicubic.png"))
-    to_pil(ref_item['base']).save(os.path.join(exp_dir, "val_base.png"))
+    # Save reference images (only if fresh start)
+    if start_epoch == 0:
+        ref_item = val_data[0]
+        to_pil(ref_item['hr']).save(os.path.join(exp_dir, "val_hr.png"))
+        to_pil(ref_item['lr_up']).save(os.path.join(exp_dir, "val_bicubic.png"))
+        to_pil(ref_item['base']).save(os.path.join(exp_dir, "val_base.png"))
 
     bicubic_metrics = validate_bicubic(val_data)
     print(f"Bicubic val: MSE={bicubic_metrics['mse']:.6f}, PSNR={bicubic_metrics['psnr']:.2f}dB, "
@@ -339,28 +340,40 @@ def run(gpu=7, epochs=TRAIN_EPOCHS):
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
 
+    # Load checkpoint if resuming
+    if resume_ckpt is not None:
+        print(f"Resuming from checkpoint: {resume_ckpt}")
+        model.load_state_dict(torch.load(resume_ckpt))
+        best_val_mse = validate(model, val_data)['mse']
+        best_epoch = start_epoch
+        print(f"Loaded model: start_epoch={start_epoch}, init_val_mse={best_val_mse:.6f}")
+    else:
+        best_val_mse = float('inf')
+        best_epoch = 0
+
     optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
+    resume_tag = f" (resume from {start_epoch})" if start_epoch > 0 else ""
     print(f"\n{'='*60}")
-    print(f"Experiment: {EXP_NAME}")
+    print(f"Experiment: {EXP_NAME}{resume_tag}")
     print(f"Params: {n_params:,}  |  base_ch={BASE_CH}")
     print(f"Input: cond({cond_ch}ch) + MS ISHT add  |  Output: residual(3ch)")
     print(f"SR = base + residual  |  Loss: MSE(residual) + {RESIDUAL_L2_WEIGHT}*L2(residual)")
     print(f"Augmentation: cyclic_roll + v_crop + color ±10% + HR_noise(std=0.005)")
-    print(f"Dataset: {N_TRAIN} train / {N_VAL} val  |  LR: {LR} (cosine)")
+    print(f"Dataset: {N_TRAIN} train / {N_VAL} val  |  LR: {LR} (cosine, {epochs} epochs)")
     print(f"Output: {exp_dir}")
     print(f"{'='*60}")
 
     train_losses = []
     val_epochs = []
     val_metrics_list = []
-    best_val_mse = float('inf')
-    best_epoch = 0
     val_every = max(20, epochs // 20)
 
     pbar = tqdm(range(1, epochs + 1), desc=f"[{EXP_NAME}]", unit="ep")
     for epoch in pbar:
+        global_epoch = start_epoch + epoch
+
         model.train()
 
         epoch_loss = 0.0
@@ -391,13 +404,13 @@ def run(gpu=7, epochs=TRAIN_EPOCHS):
         # Validation (no augmentation)
         if epoch == 1 or epoch % val_every == 0 or epoch == epochs:
             val_m = validate(model, val_data)
-            val_epochs.append(epoch)
+            val_epochs.append(global_epoch)
             val_metrics_list.append(val_m)
 
             # Save best model
             if val_m['mse'] < best_val_mse:
                 best_val_mse = val_m['mse']
-                best_epoch = epoch
+                best_epoch = global_epoch
                 torch.save(model.state_dict(), os.path.join(exp_dir, "best_model.pt"))
 
             # Save sample prediction
@@ -406,7 +419,7 @@ def run(gpu=7, epochs=TRAIN_EPOCHS):
                 val_pred = model(val_data[0]['cond'], val_data[0]['ms_isht'])
                 val_sr = val_data[0]['base'] + val_pred
             model.train()
-            to_pil(val_sr).save(os.path.join(exp_dir, f"e{epoch:04d}.png"))
+            to_pil(val_sr).save(os.path.join(exp_dir, f"e{global_epoch:04d}.png"))
 
             val_mses = [m["mse"] for m in val_metrics_list]
             update_curves(EXP_NAME, train_losses, val_epochs, val_mses,
@@ -438,6 +451,7 @@ def run(gpu=7, epochs=TRAIN_EPOCHS):
     model.load_state_dict(torch.load(os.path.join(exp_dir, "best_model.pt")))
     best_metrics = validate(model, val_data)
 
+    print(f"\n  Best checkpoints saved to {os.path.join(exp_dir, 'best_model.pt')}")
     print(f"\n  Best: epoch {best_epoch}, "
           f"MSE={best_metrics['mse']:.6f}, PSNR={best_metrics['psnr']:.2f}dB, "
           f"SSIM={best_metrics['ssim']:.4f}, NCC={best_metrics['ncc']:.4f}, "
@@ -453,7 +467,25 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Phase 6 Stage 1 v2: Direct UNet multi-image baseline")
     parser.add_argument("--gpu", "-g", type=int, default=7)
     parser.add_argument("--epochs", type=int, default=TRAIN_EPOCHS)
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from best_model.pt checkpoint")
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="Path to checkpoint to resume from")
+    parser.add_argument("--start-epoch", type=int, default=0,
+                        help="Epoch offset for resumed training (e.g., 400)")
     args = parser.parse_args()
 
     os.makedirs(os.path.join(OUTPUT_DIR, "logs"), exist_ok=True)
-    run(gpu=args.gpu, epochs=args.epochs)
+
+    resume_ckpt = None
+    start_epoch = 0
+    if args.resume:
+        ckpt_path = args.resume_from or os.path.join(OUTPUT_DIR, EXP_NAME, "best_model.pt")
+        if os.path.exists(ckpt_path):
+            resume_ckpt = ckpt_path
+            start_epoch = args.start_epoch or 400  # default: assume 400-epoch run
+        else:
+            print(f"Checkpoint not found: {ckpt_path}")
+            exit(1)
+
+    run(gpu=args.gpu, epochs=args.epochs, resume_ckpt=resume_ckpt, start_epoch=start_epoch)

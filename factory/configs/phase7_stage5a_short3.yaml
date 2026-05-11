@@ -1,0 +1,37 @@
+# Phase 7 Stage 5a: Short chain — only 3 AR steps to reduce error accumulation
+# Scales: (24,12) → (192,96) → (768,384) → (2048,1024)
+# Each step expands 8× per dimension (64× area), vs old 2× per dimension (4× area)
+experiment:
+  name: phase7_s5a_short3
+  phase: phase7
+  stage: stage5a
+  desc: "Short chain 3-step AR, base_ch=64, 8× per dim expansion"
+  trainer: center_growing
+
+model:
+  type: center_growing
+  in_ch: 10
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 3.0e-4
+  epochs: 1000
+  use_residual: true
+  scales:
+    - [24, 12]
+    - [192, 96]
+    - [768, 384]
+    - [2048, 1024]
+
+output:
+  dir: phase7_output
+  log_dir: phase7_output/logs

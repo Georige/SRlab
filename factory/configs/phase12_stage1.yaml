@@ -1,0 +1,38 @@
+# Phase 12 Stage 1: Wavelet Flow Matching multi-image training
+# Train on 16 images with full panorama augmentation.
+
+experiment:
+  name: phase12_stage1_wf_multi
+  phase: phase12
+  stage: stage1
+  desc: "Wavelet Flow Matching 16-image training with full augment"
+  trainer: wavelet_flow
+
+model:
+  type: wavelet_flow
+  base_ch: 64
+  n_blocks: 8
+  time_dim: 256
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 16
+  n_val: 4
+
+training:
+  lr: 5.0e-5
+  epochs: 400
+  l1_weight: 0.1
+  infer_steps: 4
+  augmentation:
+    roll_prob: 0.5
+    crop_prob: 0.9
+    color_prob: 0.7
+    noise_std: 0.005
+    noise_prob: 0.3
+
+output:
+  dir: phase12_output
+  log_dir: phase12_output/logs

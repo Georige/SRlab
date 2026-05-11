@@ -1,0 +1,35 @@
+# Phase 7 Stage 3a: Teacher noise bridge — base_ch=64 + teacher_noise_std=0.05
+# AR→TF gap: 4.25 dB. TF bound=30.17 dB proves capacity is sufficient.
+# Add Gaussian noise to teacher forcing crops during training to bridge the gap.
+experiment:
+  name: phase7_s3a_teacher_noise
+  phase: phase7
+  stage: stage3a
+  desc: "Teacher noise bridge — base_ch=64, noise_std=0.05, resume from s2c"
+  trainer: center_growing
+
+model:
+  type: center_growing
+  in_ch: 10
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 2.0e-4
+  epochs: 500
+  use_residual: true
+  teacher_noise_std: 0.05
+  resume_ckpt: phase7_output/phase7_s3a_teacher_noise/best_model.pt
+  start_epoch: 375
+
+output:
+  dir: phase7_output
+  log_dir: phase7_output/logs

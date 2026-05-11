@@ -1,0 +1,44 @@
+# Phase 10: SSM-Focus — Mamba (S6) bottleneck for iterative refinement
+# Route 3: State Space Focus Propagation
+# Replaces U-Net bottleneck ResBlocks with bidirectional Mamba scan
+# Uses Canon_001 from realsr_v3, reduced resolution to avoid OOM
+experiment:
+  name: phase10_ssm_focus
+  phase: phase10
+  stage: ssm_focus_s1
+  desc: "SSM-Focus — Mamba bottleneck for iterative refinement, Canon_001 single-image overfit"
+  trainer: refinement
+
+model:
+  type: ssm_focus
+  in_ch: 7
+  out_ch: 3
+  base_ch: 32
+  time_dim: 128
+  d_state: 8
+  d_conv: 4
+  expand: 1
+
+data:
+  hr_size: [480, 832]
+  scale: 2
+  data_dir: lau_dataset/realsr_canon
+  n_train: 10
+  n_val: 2
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  use_residual: true
+  # Method 1: step-dependent TF noise — noise_std = base + scale * t_norm
+  teacher_noise_base: 0.02
+  teacher_noise_scale: 0.05
+  # Method 2: random time embedding dropout (30%)
+  time_dropout: 0.3
+  # Method 3: random flips, rotations, brightness/contrast
+  augmentation: true
+
+output:
+  dir: phase10_output
+  log_dir: phase10_output/logs

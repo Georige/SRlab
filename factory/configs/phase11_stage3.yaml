@@ -1,0 +1,45 @@
+# Phase 11 Stage 3: Real-world LR with pre-encoder denoising
+# Adds pre-encoder (denoise real LR) + VGG perceptual loss
+experiment:
+  name: phase11_s3_real_lr_vgg
+  phase: phase11
+  stage: stage3
+  desc: "MorphoSR Stage 3: real LR + pre-encoder + VGG perceptual loss"
+  trainer: morpho
+
+model:
+  type: morpho_sr
+  state_ch: 16
+  hidden_ch: 64
+  cond_ch: 3
+  use_pre_encoder: true
+  pre_encoder_ch: 32
+  pre_encoder_n: 4     # 4 ResBlocks in pre-encoder
+
+data:
+  hr_size: [800, 1400]
+  scale: 2
+  data_dir: lau_dataset/realsr_canon
+  n_train: 10
+  n_val: 2
+  image_index: 0
+
+training:
+  lr: 1.0e-3
+  epochs: 1500
+  n_steps: 15
+  n_steps_min: 10
+  n_steps_max: 20
+  random_steps: true
+  p_update: 0.5
+  use_condition: true
+  overflow_weight: 0.01
+  ssim_weight: 1.0
+  vgg_weight: 0.05     # VGG perceptual loss for misalignment robustness
+  gan_weight: 0.0
+  crop_size: [256, 256]
+  batches_per_epoch: 100
+
+output:
+  dir: phase11_output
+  log_dir: phase11_output/logs

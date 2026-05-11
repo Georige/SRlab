@@ -1,0 +1,33 @@
+# Phase 9 Stage 1: Direct SR baseline — one-step 3→3 U-Net
+# Standard single-step super-resolution with full-image MSE loss
+experiment:
+  name: phase9_stage1_direct_sr
+  phase: phase9
+  stage: stage1
+  desc: "Direct SR baseline — one-step 3→3 U-Net, full-image MSE"
+  trainer: focus_refine
+
+model:
+  type: direct_sr
+  in_ch: 3                 # I_low_up only
+  base_ch: 64
+  out_ch: 3                # residual
+
+data:
+  hr_size: [512, 512]
+  full_size: [1024, 2048]   # source panorama (H, W) — images are 2048×1024
+  scale: 2
+  data_dir: lau_dataset/sun_test
+  n_train: 10
+  n_val: 4
+  crops_per_image: 5
+
+training:
+  mode: direct              # one-step training
+  lr: 1.0e-4
+  epochs: 500
+  use_residual: true
+
+output:
+  dir: phase9_output
+  log_dir: phase9_output/logs

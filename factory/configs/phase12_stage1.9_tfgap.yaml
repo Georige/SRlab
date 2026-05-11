@@ -1,0 +1,43 @@
+# Phase 12 Stage 1.9: Fix teacher-forcing gap
+# - TF noise std=0.005: injects noise into x_t during training
+# - Pixel loss weight=0.1: auxiliary pixel-space loss
+# - 8 Euler steps: more accurate ODE integration
+# - Aligned crop + CondEncoder + lr=2e-4
+
+experiment:
+  name: phase12_stage1.9_tfgap
+  phase: phase12
+  stage: stage1.9
+  desc: "W-VFE + CondEncoder + TF noise + pixel loss + 8-step Euler"
+  trainer: wavelet_flow
+
+model:
+  type: wavelet_flow
+  base_ch: 64
+  n_blocks: 8
+  time_dim: 256
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 16
+  n_val: 4
+
+training:
+  lr: 2.0e-4
+  epochs: 200
+  l1_weight: 0.1
+  infer_steps: 8
+  tf_noise_std: 0.005
+  pixel_weight: 0.1
+  augmentation:
+    roll_prob: 0.5
+    crop_prob: 0.9
+    color_prob: 0.7
+    noise_std: 0.005
+    noise_prob: 0.3
+
+output:
+  dir: phase12_output
+  log_dir: phase12_output/logs

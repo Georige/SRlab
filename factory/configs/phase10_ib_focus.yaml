@@ -1,0 +1,58 @@
+# Phase 10: IB-Focus (Information Bottleneck Focus) — Route B
+# Core idea: spatial adaptive information retention at the UNet bottleneck.
+# The model is forced to allocate its "information budget" to the center,
+# while edge regions are replaced with a learnable mask_token.
+#
+# Loss: Charbonnier (focus region) + VGG perceptual (final output)
+#       + IB sparsity (L1 on 1-M) + full-image consistency (final step)
+experiment:
+  name: phase10_ib_focus
+  phase: phase10
+  stage: stage0
+  desc: "IB-Focus 10-image train + 2 val — 512x1024 crops, 5-step, Charbonnier+VGG+IB sparse"
+  trainer: ib_focus
+
+model:
+  type: ib_focus
+  in_ch: 4
+  base_ch: 64
+  out_ch: 3
+  time_dim: 128
+  sigma_max: 0.6      # σ=0.3×H in normalized coords (wide aperture at t=0)
+  sigma_min: 0.1      # σ=0.05×H in normalized coords (tight focus at t=T-1)
+
+data:
+  hr_size: [512, 1024]      # H, W
+  scale: 2                   # LR = HR / 2
+  data_dir: datasets/realsr_v3/Canon/Train/2
+  n_train: 10
+  n_val: 2
+  crops_per_image: 3
+
+training:
+  lr: 1.0e-4
+  epochs: 500
+  num_steps: 5
+  center_regions: [[512, 1024], [384, 768], [256, 512], [128, 256], [64, 128]]
+  use_residual: true
+  teacher_noise_std: 0.0
+
+  # Charbonnier loss epsilon (smooth L1 approximation)
+  charbonnier_eps: 1.0e-3
+
+  # Perceptual loss: 'vgg' (built-in VGG19) or 'lpips' (requires pip install lpips)
+  perceptual_type: vgg
+  perceptual_weight: 0.01    # λ_perc
+
+  # IB sparsity: L1 penalty on (1-M) to encourage edge compression
+  sparse_weight: 1.0e-6      # λ_sparse
+
+  # Full-image Charbonnier consistency on final step (low weight)
+  full_image_weight: 0.1
+
+  # Gradient clipping
+  grad_clip: 1.0
+
+output:
+  dir: phase10_output
+  log_dir: phase10_output/logs

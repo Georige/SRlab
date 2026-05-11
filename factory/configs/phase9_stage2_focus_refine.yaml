@@ -1,0 +1,41 @@
+# Phase 9 Stage 2: FocusRefine Full — full dataset (80 images)
+# Experiment C: Full-scale training and final comparison
+experiment:
+  name: phase9_stage2_focus_refine
+  phase: phase9
+  stage: stage2
+  desc: "FocusRefine Full — 5-step iterative refinement, 80 train images, full comparison"
+  trainer: focus_refine
+
+model:
+  type: focus_refine
+  in_ch: 4
+  base_ch: 64
+  out_ch: 3
+  time_dim: 128
+  use_spatial_bias: true
+  use_time_embedding: true
+
+data:
+  hr_size: [512, 512]
+  full_size: [1024, 2048]   # source panorama (H, W) — images are 2048×1024
+  scale: 2
+  data_dir: lau_dataset/sun_test
+  n_train: 80
+  n_val: 10
+  crops_per_image: 10
+
+training:
+  mode: iterative
+  lr: 5.0e-5                # lower LR for larger dataset
+  epochs: 1000
+  num_steps: 5
+  center_regions: [512, 384, 256, 128, 64]
+  use_residual: true
+  teacher_noise_std: 0.03    # small TF noise for AR robustness
+  scheduled_sampling: true    # bridge TF→AR gap
+  ss_max_prob: 0.3
+
+output:
+  dir: phase9_output
+  log_dir: phase9_output/logs

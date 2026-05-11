@@ -1,0 +1,35 @@
+# Phase 9 Stage 1: Center Loss Only baseline
+# Same 3→3 U-Net as Direct SR, but center 1/4 region gets 5× weight in loss
+experiment:
+  name: phase9_stage1_center_loss
+  phase: phase9
+  stage: stage1
+  desc: "Center Loss Only — one-step 3→3 U-Net with center-weighted MSE (center 5×)"
+  trainer: focus_refine
+
+model:
+  type: direct_sr
+  in_ch: 3
+  base_ch: 64
+  out_ch: 3
+
+data:
+  hr_size: [512, 512]
+  full_size: [1024, 2048]   # source panorama (H, W) — images are 2048×1024
+  scale: 2
+  data_dir: lau_dataset/sun_test
+  n_train: 10
+  n_val: 4
+  crops_per_image: 5
+
+training:
+  mode: center_loss          # center-weighted loss
+  lr: 1.0e-4
+  epochs: 500
+  use_residual: true
+  center_loss_weight: 5.0    # center region gets 5× weight
+  center_loss_region: 128    # center 1/4 of 512
+
+output:
+  dir: phase9_output
+  log_dir: phase9_output/logs

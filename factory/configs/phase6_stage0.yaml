@@ -1,0 +1,42 @@
+# Phase 6 Stage 0: Single-image sanity check
+experiment:
+  name: s0_direct_sanity
+  phase: phase6
+  stage: stage0
+  desc: "Single-image overfit sanity check with learnable latent"
+
+model:
+  type: direct_unet
+  cond_ch: 6
+  base_ch: 64
+  latent_ch: 3
+  use_polar_moe: false
+  use_circular_conv: false
+  use_coord_embed: false
+  use_spherical_attn: false
+  ms_injection: add
+  out_ch: 3
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 1
+  n_val: 1
+  l_cond: 255
+  ms_cond: [[128, 2], [64, 4], [32, 8]]
+
+training:
+  lr: 2.0e-4
+  epochs: 500
+  residual_l2_weight: 0.0
+  augmentation:
+    roll_prob: 0.0
+    crop_prob: 0.0
+    color_prob: 0.0
+    noise_std: 0.0
+    noise_prob: 0.0
+
+output:
+  dir: phase6_output
+  log_dir: phase6_output/logs

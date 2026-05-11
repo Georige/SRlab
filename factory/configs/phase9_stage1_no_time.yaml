@@ -1,0 +1,40 @@
+# Phase 9 Stage 1: FocusRefine w/o Time — ablation
+# 5-step model without time embedding (model doesn't know which step it's at)
+experiment:
+  name: phase9_stage1_no_time
+  phase: phase9
+  stage: stage1
+  desc: "FocusRefine w/o Time — 5-step refinement, no time embedding (model blind to step number)"
+  trainer: focus_refine
+
+model:
+  type: focus_refine
+  in_ch: 4
+  base_ch: 64
+  out_ch: 3
+  time_dim: 128
+  use_spatial_bias: true
+  use_time_embedding: false     # <-- ablation: no time embedding
+
+data:
+  hr_size: [512, 512]
+  full_size: [1024, 2048]   # source panorama (H, W) — images are 2048×1024
+  scale: 2
+  data_dir: lau_dataset/sun_test
+  n_train: 10
+  n_val: 4
+  crops_per_image: 5
+
+training:
+  mode: iterative
+  lr: 1.0e-4
+  epochs: 500
+  num_steps: 5
+  center_regions: [512, 384, 256, 128, 64]
+  use_residual: true
+  teacher_noise_std: 0.0
+  scheduled_sampling: false
+
+output:
+  dir: phase9_output
+  log_dir: phase9_output/logs

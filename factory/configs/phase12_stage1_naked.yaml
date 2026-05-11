@@ -1,0 +1,38 @@
+# Phase 12 Stage 1.5a: "Naked Run" — control experiment
+# All augmentation disabled, lr=2e-4.
+# Purpose: prove 1.9M params can overfit 16 images (PSNR > 28 dB).
+
+experiment:
+  name: phase12_stage1_naked
+  phase: phase12
+  stage: stage1.5a
+  desc: "Wavelet Flow 16-image NO augmentation (control experiment)"
+  trainer: wavelet_flow
+
+model:
+  type: wavelet_flow
+  base_ch: 64
+  n_blocks: 8
+  time_dim: 256
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 16
+  n_val: 4
+
+training:
+  lr: 2.0e-4
+  epochs: 200
+  l1_weight: 0.1
+  infer_steps: 4
+  augmentation:
+    roll_prob: 0.0
+    crop_prob: 0.0
+    color_prob: 0.0
+    noise_prob: 0.0
+
+output:
+  dir: phase12_output
+  log_dir: phase12_output/logs

@@ -1,0 +1,52 @@
+# Phase 11 Stage 2: Multi-image generalization with Stage 1.5 v2 recipe
+# Carries forward all winning ingredients:
+#   1. Residual prediction: SR = bicubic_up + model_residual
+#   2. Per-step injection: overwrite state[:, -3:] with bicubic each step
+#   3. Zero-init: init_conv starts at zero → initial SR = bicubic
+#   4. Ensemble validation: 4-run average with p_update=0.5
+#   5. Random steps + SSIM loss + crop training for robustness
+experiment:
+  name: phase11_s2_v2_10img
+  phase: phase11
+  stage: stage2
+  desc: "MorphoSR Stage 2: 10 images, residual+inject+zero, L1+SSIM, random 10-20 steps"
+  trainer: morpho
+
+model:
+  type: morpho_sr
+  state_ch: 16
+  hidden_ch: 64
+  cond_ch: 0           # Condition inside state (ch 13-15), not concat to MLP
+  inject_cond: true    # Overwrite state[:, -3:] with bicubic every NCA step
+  zero_init: true      # Initial SR = bicubic exactly
+  use_pre_encoder: false
+
+data:
+  hr_size: [800, 1400]
+  scale: 2
+  data_dir: lau_dataset/realsr_canon
+  n_train: 10
+  n_val: 2
+  image_index: 0
+
+training:
+  lr: 2.0e-4           # Lower LR: 10 images + zero-init needs gentler updates
+  epochs: 1500
+  n_steps: 15
+  n_steps_min: 10
+  n_steps_max: 20
+  random_steps: true
+  p_update: 0.5
+  use_condition: true
+  residual_mode: true   # SR = bicubic_up + model output
+  val_ensemble: 4       # 4-run average, p_update=0.5
+  overflow_weight: 0.01
+  ssim_weight: 1.0
+  vgg_weight: 0.0
+  gan_weight: 0.0
+  crop_size: [256, 256]
+  batches_per_epoch: 100
+
+output:
+  dir: phase11_output
+  log_dir: phase11_output/logs

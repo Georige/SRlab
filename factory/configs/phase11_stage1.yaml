@@ -1,0 +1,41 @@
+# Phase 11 Stage 1: Single-image NCA sanity check
+# Pure cellular automata — no conditioning, no pre-encoder, L1 only
+experiment:
+  name: phase11_s1_clean_baseline
+  phase: phase11
+  stage: stage1
+  desc: "MorphoSR Stage 1: single image, bicubic LR, no conditioning, L1, 15 fixed steps"
+  trainer: morpho
+
+model:
+  type: morpho_sr
+  state_ch: 16
+  hidden_ch: 64
+  cond_ch: 0           # No conditioning
+  use_pre_encoder: false
+
+data:
+  hr_size: [800, 1400]
+  scale: 2
+  data_dir: lau_dataset/realsr_canon
+  n_train: 1           # Single image overfitting
+  n_val: 1
+  image_index: 0       # Canon_001
+
+training:
+  lr: 1.0e-3
+  epochs: 500
+  n_steps: 15          # Fixed 15 steps
+  random_steps: false
+  p_update: 0.5
+  use_condition: false
+  overflow_weight: 0.01
+  ssim_weight: 0.0
+  vgg_weight: 0.0
+  gan_weight: 0.0
+  crop_size: null      # Full image (800×1400, ~68MB state)
+  batches_per_epoch: 1
+
+output:
+  dir: phase11_output
+  log_dir: phase11_output/logs

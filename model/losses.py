@@ -29,21 +29,41 @@ class VGGLoss(nn.Module):
             layers = ['relu1_2', 'relu2_2', 'relu3_4', 'relu4_4', 'relu5_4']
         self.layers = layers
         self.normalize_input = normalize_input
+        self._device = None
 
         vgg = models.vgg19(weights=models.VGG19_Weights.IMAGENET1K_V1)
         vgg.eval()
         for p in vgg.parameters():
             p.requires_grad = False
 
-        # Slice into feature extractors
+        # Collect all ReLU indices and name them properly
+        relu_indices = [i for i, layer in enumerate(vgg.features)
+                        if isinstance(layer, nn.ReLU)]
+        relu_map = {}  # name -> (start_idx, end_idx)
+        block, pos = 1, 1
+        prev_relu = -1
+        for idx in relu_indices:
+            # New block starts after a MaxPool2d
+            for j in range(max(0, prev_relu + 1), idx):
+                if isinstance(vgg.features[j], nn.MaxPool2d):
+                    block += 1
+                    pos = 1
+                    break
+            name = f'relu{block}_{pos}'
+            start = prev_relu + 1  # right after previous ReLU
+            relu_map[name] = (start, idx)
+            pos += 1
+            prev_relu = idx
+
+        # Build cumulative feature slices for requested layers
         self.slices = nn.ModuleList()
-        prev = 0
-        for i, layer in enumerate(vgg.features):
-            if isinstance(layer, nn.ReLU):
-                name = f'relu{prev+1}_{i-prev}'
-                if name in layers:
-                    self.slices.append(vgg.features[prev:i+1])
-                    prev = i + 1
+        for name in layers:
+            if name in relu_map:
+                _start, end = relu_map[name]
+                self.slices.append(vgg.features[0:end+1])  # cumulative from input
+        if not self.slices:
+            raise ValueError(f"No VGG layers matched. Requested: {layers}. "
+                             f"Available: {sorted(relu_map.keys())}")
 
     def _preprocess(self, x):
         """Convert [-1,1] RGB to VGG ImageNet normalization."""
@@ -54,17 +74,18 @@ class VGGLoss(nn.Module):
         return (x - mean) / std
 
     def forward(self, pred, target):
+        # Auto-move VGG slices to input device on first call
+        if self._device != pred.device:
+            self.slices = self.slices.to(pred.device)
+            self._device = pred.device
+
         if self.normalize_input:
             pred = self._preprocess(pred)
             target = self._preprocess(target)
 
         loss = 0.0
         for s in self.slices:
-            pred = s(pred)
-            with torch.no_grad():
-                target = s(target)
-            loss += F.l1_loss(pred, target)
-
+            loss += F.l1_loss(s(pred), s(target))
         return loss / len(self.slices)
 
 

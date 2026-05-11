@@ -1,0 +1,36 @@
+# Phase 7 Stage 4a: Scheduled Sampling to bridge AR↔TF gap
+# Resume from S2c best model (TF=30.2dB, AR=21.4dB) and continue training
+# with probability p_self ramping from 0→0.5 of using model's own predictions
+experiment:
+  name: phase7_s4a_sched_sampling
+  phase: phase7
+  stage: stage4a
+  desc: "Scheduled Sampling base_ch=64, p_self 0→0.5, resume from S2c best"
+  trainer: center_growing
+
+model:
+  type: center_growing
+  in_ch: 10
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 2.0e-4
+  epochs: 500
+  use_residual: true
+  scheduled_sampling: true
+  ss_max_prob: 0.5
+  resume_ckpt: phase7_output/phase7_s2c_basech64/best_model.pt
+  start_epoch: 350
+
+output:
+  dir: phase7_output
+  log_dir: phase7_output/logs

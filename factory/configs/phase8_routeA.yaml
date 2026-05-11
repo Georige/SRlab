@@ -1,0 +1,42 @@
+# Phase 8 Route A: Multi-Scale Consistency Training
+# Single forward pass with auxiliary decoder heads providing multi-scale center loss.
+# No autoregressive inference — one-shot prediction.
+experiment:
+  name: phase8_routeA_multiscale
+  phase: phase8
+  stage: routeA
+  desc: "Multi-scale consistency — single forward UNet with aux decoder heads, center crop losses"
+  trainer: multiscale
+
+model:
+  type: multiscale_consistency
+  in_ch: 3
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  use_residual: true
+  # Multi-scale loss weights: deeper (coarser) = stronger center emphasis
+  aux_weights:
+    dec3: 0.3
+    dec2: 0.15
+    dec1: 0.05
+  # Center crop ratios for aux heads (fraction of native feature map resolution)
+  center_crop_ratios:
+    dec3: 0.5
+    dec2: 0.6
+    dec1: 0.8
+
+output:
+  dir: phase8_output
+  log_dir: phase8_output/logs

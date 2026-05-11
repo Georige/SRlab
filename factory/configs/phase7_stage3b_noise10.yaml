@@ -1,0 +1,35 @@
+# Phase 7 Stage 3b: Aggressive teacher noise — base_ch=64 + teacher_noise_std=0.10
+# Stage 3a achieved AR=27.08 dB (from 25.91). Gap to TF (31.19) is still 4.11 dB.
+# Higher noise should bridge more of the AR→TF gap faster.
+experiment:
+  name: phase7_s3b_noise10
+  phase: phase7
+  stage: stage3b
+  desc: "Aggressive teacher noise — base_ch=64, noise_std=0.10, resume from s3a"
+  trainer: center_growing
+
+model:
+  type: center_growing
+  in_ch: 10
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 2.0e-4
+  epochs: 500
+  use_residual: true
+  teacher_noise_std: 0.10
+  resume_ckpt: phase7_output/phase7_s3a_teacher_noise/best_model.pt
+  start_epoch: 500
+
+output:
+  dir: phase7_output
+  log_dir: phase7_output/logs

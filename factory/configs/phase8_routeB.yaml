@@ -1,0 +1,34 @@
+# Phase 8 Route B: Iterative Refinement with Center-First Schedule
+# Same-resolution iterative refinement (1024x2048 throughout).
+# Time embedding guides each step's refinement of the central annular region.
+# "Denoising from center outward" rather than "generating outward".
+experiment:
+  name: phase8_routeB_refinement
+  phase: phase8
+  stage: routeB
+  desc: "Iterative refinement — same-resolution denoising with center-first schedule, time embedding"
+  trainer: refinement
+
+model:
+  type: iterative_refinement
+  in_ch: 7
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  use_residual: true
+  teacher_noise_std: 0.0
+
+output:
+  dir: phase8_output
+  log_dir: phase8_output/logs

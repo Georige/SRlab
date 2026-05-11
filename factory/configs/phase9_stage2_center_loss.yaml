@@ -1,0 +1,34 @@
+# Phase 9 Stage 2: Center Loss Only baseline — full dataset (80 images)
+experiment:
+  name: phase9_stage2_center_loss
+  phase: phase9
+  stage: stage2
+  desc: "Center Loss Only — one-step 3→3 U-Net, center-weighted loss, 80 train images"
+  trainer: focus_refine
+
+model:
+  type: direct_sr
+  in_ch: 3
+  base_ch: 64
+  out_ch: 3
+
+data:
+  hr_size: [512, 512]
+  full_size: [1024, 2048]   # source panorama (H, W) — images are 2048×1024
+  scale: 2
+  data_dir: lau_dataset/sun_test
+  n_train: 80
+  n_val: 10
+  crops_per_image: 10
+
+training:
+  mode: center_loss
+  lr: 5.0e-5
+  epochs: 1000
+  use_residual: true
+  center_loss_weight: 5.0
+  center_loss_region: 128
+
+output:
+  dir: phase9_output
+  log_dir: phase9_output/logs

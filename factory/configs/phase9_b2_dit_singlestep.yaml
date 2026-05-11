@@ -1,0 +1,43 @@
+# Phase 9 Route B-2: Single-Step Forward Focus DiT
+# One forward pass, multi-scale heads with Center-Bias Attention
+experiment:
+  name: phase9_b2_dit_singlestep
+  phase: phase9
+  stage: b2
+  desc: "B-2 SingleStepDiT — Center-Bias Attention + multi-scale heads, one-shot refinement"
+  trainer: focus_refine
+
+model:
+  type: dit_singlestep
+  in_ch: 4                 # I_low_up(3) + center_prior(1)
+  dim: 512
+  depth: 8
+  num_heads: 8
+  patch_size: 16
+  mlp_ratio: 4
+  head_specs:               # list of [layer_idx, name, region_H, region_W]; null=full image
+    - [2, c64, 64, 64]
+    - [4, c128, 128, 128]
+    - [7, full, null, null]
+
+data:
+  hr_size: [512, 1024]
+  scale: 2
+  data_dir: datasets/realsr_v3/Canon/Train/2
+  n_train: 50
+  n_val: 2
+  crops_per_image: 3
+
+training:
+  mode: dit_single          # single forward pass with multi-head loss
+  lr: 5.0e-5
+  epochs: 500
+  use_residual: true
+  head_loss_weights:        # λ for each prediction head
+    c64: 1.0
+    c128: 0.5
+    full: 0.1
+
+output:
+  dir: phase9_output
+  log_dir: phase9_output/logs

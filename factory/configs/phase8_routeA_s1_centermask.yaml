@@ -1,0 +1,44 @@
+# Phase 8 Route A Scheme 1: Center Mask Conditioning
+# Input: 4 channels [I_low_up, center_mask]
+# Center mask is a binary map with center 1/4 area = 1, elsewhere 0.
+# Loss: full-image MSE with center-weighted Gaussian weighting.
+experiment:
+  name: phase8_routeA_s1_centermask
+  phase: phase8
+  stage: routeA_s1
+  desc: "Route A variant 1 — center mask as extra input channel, center-weighted MSE loss"
+  trainer: multiscale_center
+
+model:
+  type: multiscale_center_mask
+  in_ch: 3
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  use_residual: true
+  # Center-weighted loss: Gaussian peaked at image center
+  center_weight_boost: 1.0    # extra weight at center (1.0 = center has 2x weight)
+  center_weight_sigma: 0.25   # Gaussian sigma as fraction of H/W
+  aux_weights:
+    dec3: 0.3
+    dec2: 0.15
+    dec1: 0.05
+  center_crop_ratios:
+    dec3: 0.5
+    dec2: 0.6
+    dec1: 0.8
+
+output:
+  dir: phase8_output
+  log_dir: phase8_output/logs

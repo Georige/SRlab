@@ -1,0 +1,31 @@
+# Phase 7 Stage 0: Center-growing UNet single-image overfitting (2048×1024 pixel space)
+experiment:
+  name: phase7_stage0_cg_pixel
+  phase: phase7
+  stage: stage0
+  desc: "Center-growing UNet single-image overfit — 512×1024→1024×2048, scales (6,3)→...→(2048,1024)"
+  trainer: center_growing
+
+model:
+  type: center_growing
+  in_ch: 10
+  out_ch: 3
+  base_ch: 32
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 2000
+  use_residual: true
+  teacher_noise_std: 0.0
+
+output:
+  dir: phase7_output
+  log_dir: phase7_output/logs

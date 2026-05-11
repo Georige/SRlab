@@ -1,0 +1,37 @@
+# Phase 12 Stage 0: Wavelet Flow Matching single-image sanity check
+# Overfit 1 image with no augmentation to verify the flow matching pipeline.
+
+experiment:
+  name: phase12_stage0_wf_sanity
+  phase: phase12
+  stage: stage0
+  desc: "Wavelet Flow Matching single-image overfit sanity (no augment)"
+  trainer: wavelet_flow
+
+model:
+  type: wavelet_flow
+  base_ch: 64
+  n_blocks: 8
+  time_dim: 256
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 1
+  n_val: 1
+
+training:
+  lr: 1.0e-4
+  epochs: 500
+  l1_weight: 0.1
+  infer_steps: 4
+  augmentation:
+    roll_prob: 0.0
+    crop_prob: 0.0
+    color_prob: 0.0
+    noise_prob: 0.0
+
+output:
+  dir: phase12_output
+  log_dir: phase12_output/logs

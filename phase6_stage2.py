@@ -1,25 +1,34 @@
 """Phase 6 Stage 2: Re-validate panoramic modules on multi-image generalization.
 
-Each experiment adds ONE module to the Stage 1 baseline, trains 300-400 epochs,
-and compares against the baseline (s1_direct_baseline) on val metrics.
+Each experiment adds ONE module to the Stage 1 baseline (v2 recipe), trains 400 epochs,
+and compares against the baseline (s1_direct_baseline_v2) on val metrics.
+
+v2 recipe (matching Stage 1 v2 success):
+  - NO learnable latent — model must generalize from condition
+  - NO zero-init — random init, let optimizer find good starting point
+  - Residual prediction: output = base + model(cond), L2 reg on residual (1e-4)
+  - Panorama-specific data augmentation: cyclic roll, vertical crop, color jitter
+  - LR=5e-5, cosine annealing, 400 epochs
+  - Early stopping: track best val MSE checkpoint
 
 Experiments:
-  2.1  +MS ISHT injection (add)      — multi-scale frequency injection
+  2.1  +MS ISHT injection (add)      — matches baseline (sanity check)
   2.2  +PolarMoE (bal λ=0.01)        — polar/equatorial expert split
   2.3  +CoordEmbed (24ch)            — spherical position encoding
   2.4  +CircularConv                 — circular W-padding
   2.5  +SphericalAttention           — axial self-attention at bottleneck
 
-Decision: keep if val PSNR improves >0.1dB or Edge-NCC increases significantly.
+Decision: keep if val PSNR improves >0.1dB vs baseline (25.73dB).
 
 Usage:
   python phase6_stage2.py -e 2.1 -g 7
-  python phase6_stage2.py -e 2.2 -g 8
+  python phase6_stage2.py -e 2.2 -g 6
   ...
 """
 
 import argparse
 import os
+import random
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -41,8 +50,9 @@ H, W = 512, 1024
 L_COND = 255
 SCALE = 4
 BASE_CH = 64
-LR = 2e-4
-TRAIN_EPOCHS = 300
+LR = 5e-5
+RESIDUAL_L2_WEIGHT = 1e-4
+TRAIN_EPOCHS = 400
 DATA_DIR = "lau_dataset/sun_test"
 OUTPUT_DIR = "phase6_output"
 
@@ -56,10 +66,15 @@ MS_COND = [
     (32,  8),
 ]
 
+# Baseline metrics from Stage 1 v2 (best epoch 580)
+BASELINE_MSE = 0.010763
+BASELINE_PSNR = 25.73
+BASELINE_SSIM = 0.6238
+
 MODULE_CONFIGS = {
     "2.1": {
         "name": "s2.1_ms_isht",
-        "desc": "Multi-scale ISHT injection (add)",
+        "desc": "Multi-scale ISHT injection (add) — baseline sanity check",
         "use_polar_moe": False,
         "use_circular_conv": False,
         "use_coord_embed": False,
@@ -111,7 +126,65 @@ MODULE_CONFIGS = {
 
 
 # ============================================================
-# Data helpers (same as Stage 1)
+# Panorama-specific data augmentation
+# ============================================================
+
+def augment_panorama(cond, hr, base, ms_isht, training=True):
+    """Apply panorama-aware augmentations during training.
+    Same as Stage 1 v2."""
+    if not training:
+        return cond, hr, base
+
+    B, C, Hi, Wi = cond.shape
+
+    # 1. Horizontal cyclic roll (50% chance)
+    if random.random() < 0.5:
+        shift_w = random.randint(0, Wi - 1)
+        cond = torch.roll(cond, shifts=shift_w, dims=-1)
+        hr   = torch.roll(hr,   shifts=shift_w, dims=-1)
+        base = torch.roll(base, shifts=shift_w, dims=-1)
+
+    # 2. Vertical crop + resize (90% chance, 0-10% crop)
+    if random.random() < 0.9:
+        crop_px = random.randint(0, Hi // 10)
+        if crop_px > 1:
+            top = random.randint(0, crop_px)
+            bottom = Hi - (crop_px - top)
+            cond = F.interpolate(cond[:, :, top:bottom, :], size=(Hi, Wi),
+                                 mode='bilinear', align_corners=False)
+            hr   = F.interpolate(hr[:, :, top:bottom, :], size=(Hi, Wi),
+                                 mode='bilinear', align_corners=False)
+            base = F.interpolate(base[:, :, top:bottom, :], size=(Hi, Wi),
+                                 mode='bilinear', align_corners=False)
+            for key in ms_isht:
+                h_t, w_t = ms_isht[key].shape[2], ms_isht[key].shape[3]
+                ms_isht[key] = F.interpolate(
+                    ms_isht[key][:, :, top*h_t//Hi:bottom*h_t//Hi, :],
+                    size=(h_t, w_t), mode='bilinear', align_corners=False)
+
+    # 3. Color jitter — brightness/contrast (±10%)
+    if random.random() < 0.7:
+        b_shift = (random.random() - 0.5) * 0.2
+        cond = cond + b_shift
+        hr   = hr   + b_shift
+        c_scale = 1.0 + (random.random() - 0.5) * 0.2
+        cond_mean = cond.mean(dim=(-2, -1), keepdim=True)
+        hr_mean   = hr.mean(dim=(-2, -1), keepdim=True)
+        cond = (cond - cond_mean) * c_scale + cond_mean
+        hr   = (hr   - hr_mean)   * c_scale + hr_mean
+        cond = torch.clamp(cond, -1, 1)
+        hr   = torch.clamp(hr,   -1, 1)
+
+    # 4. Gaussian noise on HR target (30% chance)
+    if random.random() < 0.3:
+        hr = hr + torch.randn_like(hr) * 0.005
+        hr = torch.clamp(hr, -1, 1)
+
+    return cond, hr, base
+
+
+# ============================================================
+# Data helpers
 # ============================================================
 
 def build_dataset(device, n_train=N_TRAIN, n_val=N_VAL):
@@ -232,13 +305,12 @@ def compute_metrics(pred, target):
 
 
 @torch.no_grad()
-def validate(model, val_data, latent, ms_injection='add'):
+def validate(model, val_data, ms_injection='add'):
     model.eval()
     agg = {"mse": 0.0, "ncc": 0.0, "edge_ncc": 0.0, "psnr": 0.0, "ssim": 0.0}
     for item in val_data:
         ms_isht = item['ms_isht'] if ms_injection != 'none' else None
-        pred_residual = model(item['cond'], ms_isht,
-                              latent=latent.expand(1, -1, -1, -1))
+        pred_residual = model(item['cond'], ms_isht)
         sr = item['base'] + pred_residual
         m = compute_metrics(sr, item['hr'])
         for k in agg:
@@ -249,12 +321,23 @@ def validate(model, val_data, latent, ms_injection='add'):
     return agg
 
 
+@torch.no_grad()
+def validate_bicubic(val_data):
+    agg = {"mse": 0.0, "ncc": 0.0, "edge_ncc": 0.0, "psnr": 0.0, "ssim": 0.0}
+    for item in val_data:
+        m = compute_metrics(item['lr_up'], item['hr'])
+        for k in agg:
+            agg[k] += m[k]
+    for k in agg:
+        agg[k] /= len(val_data)
+    return agg
+
+
 # ============================================================
 # Experiment runner
 # ============================================================
 
-def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
-                   baseline_psnr=None, baseline_ssim=None):
+def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS, resume_ckpt=None, start_epoch=0):
     cfg = MODULE_CONFIGS[exp_key]
     exp_name = cfg["name"]
     device = torch.device(f"cuda:{gpu}" if torch.cuda.is_available() else "cpu")
@@ -264,17 +347,23 @@ def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
     print(f"[{exp_name}] Loading {N_TRAIN+N_VAL} panoramas...")
     train_data, val_data = build_dataset(device)
 
-    # Save reference images
-    ref_item = val_data[0]
-    to_pil(ref_item['hr']).save(os.path.join(exp_dir, "val_hr.png"))
-    to_pil(ref_item['lr_up']).save(os.path.join(exp_dir, "val_bicubic.png"))
+    # Save reference images (only if fresh start)
+    if start_epoch == 0:
+        ref_item = val_data[0]
+        to_pil(ref_item['hr']).save(os.path.join(exp_dir, "val_hr.png"))
+        to_pil(ref_item['lr_up']).save(os.path.join(exp_dir, "val_bicubic.png"))
+        to_pil(ref_item['base']).save(os.path.join(exp_dir, "val_base.png"))
 
-    # Build model with this experiment's module config
+    bicubic_metrics = validate_bicubic(val_data)
+    print(f"Bicubic val: MSE={bicubic_metrics['mse']:.6f}, PSNR={bicubic_metrics['psnr']:.2f}dB, "
+          f"SSIM={bicubic_metrics['ssim']:.4f}")
+
+    # Build model: v2 recipe — NO latent, NO zero-init
     cond_ch = train_data[0]['cond'].shape[1]
     model = DirectUNet(
         cond_ch=cond_ch,
         base_ch=BASE_CH,
-        latent_ch=3,
+        latent_ch=0,
         use_polar_moe=cfg["use_polar_moe"],
         use_circular_conv=cfg["use_circular_conv"],
         use_coord_embed=cfg["use_coord_embed"],
@@ -285,42 +374,46 @@ def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
     ).to(device)
     n_params = sum(p.numel() for p in model.parameters())
 
-    # Zero-init final conv → SR ≈ base initially
-    for m in model.final.modules():
-        if isinstance(m, nn.Conv2d):
-            nn.init.zeros_(m.weight)
-            if m.bias is not None:
-                nn.init.zeros_(m.bias)
+    # Load checkpoint if resuming
+    if resume_ckpt is not None:
+        print(f"Resuming from checkpoint: {resume_ckpt}")
+        model.load_state_dict(torch.load(resume_ckpt))
+        best_val_mse = validate(model, val_data, ms_injection=cfg["ms_injection"])['mse']
+        best_epoch = start_epoch
+        print(f"Loaded model: start_epoch={start_epoch}, init_val_mse={best_val_mse:.6f}")
+    else:
+        best_val_mse = float('inf')
+        best_epoch = 0
 
-    # Shared learnable latent
-    latent = nn.Parameter(torch.zeros(1, 3, H, W, device=device))
-
-    optimizer = torch.optim.Adam(list(model.parameters()) + [latent], lr=LR)
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
 
+    resume_tag = f" (resume from {start_epoch})" if start_epoch > 0 else ""
     print(f"\n{'='*60}")
-    print(f"Experiment: {exp_name} — {cfg['desc']}")
+    print(f"Experiment: {exp_name} — {cfg['desc']}{resume_tag}")
     print(f"Params: {n_params:,}  |  base_ch={BASE_CH}")
     print(f"Modules: PolarMoE={cfg['use_polar_moe']}  "
           f"CoordEmbed={cfg['use_coord_embed']}  "
           f"CircularConv={cfg['use_circular_conv']}  "
           f"SphericalAttn={cfg['use_spherical_attn']}")
     print(f"MS ISHT: {cfg['ms_injection']}  |  Balance weight: {cfg['balance_weight']}")
-    print(f"Dataset: {N_TRAIN} train / {N_VAL} val")
-    print(f"Loss: MSE on residual  |  SR = base + residual  |  Epochs: {epochs}")
-    if baseline_psnr is not None:
-        print(f"Baseline (Stage 1): PSNR={baseline_psnr:.2f}dB, SSIM={baseline_ssim:.4f}")
+    print(f"Dataset: {N_TRAIN} train / {N_VAL} val  |  LR: {LR} (cosine, {epochs} epochs)")
+    print(f"Loss: MSE(residual) + {RESIDUAL_L2_WEIGHT}*L2(residual)"
+          f"{' + bal*load_balance' if cfg['balance_weight'] > 0 else ''}")
+    print(f"Augmentation: cyclic_roll + v_crop + color ±10% + HR_noise(std=0.005)")
+    print(f"Baseline (Stage 1 v2): PSNR={BASELINE_PSNR:.2f}dB, SSIM={BASELINE_SSIM:.4f}")
     print(f"Output: {exp_dir}")
     print(f"{'='*60}")
 
     train_losses = []
     val_epochs = []
-    val_metrics = []
-    balance_losses = []
+    val_metrics_list = []
     val_every = max(20, epochs // 20)
 
     pbar = tqdm(range(1, epochs + 1), desc=f"[{exp_name}]", unit="ep")
     for epoch in pbar:
+        global_epoch = start_epoch + epoch
+
         model.train()
 
         epoch_loss = 0.0
@@ -329,15 +422,25 @@ def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
         ms_isht_none = cfg["ms_injection"] == 'none'
 
         for item in train_data:
-            ms_isht = None if ms_isht_none else item['ms_isht']
-            residual_true = item['hr'] - item['base']
-            pred_residual = model(item['cond'], ms_isht,
-                                  latent=latent.expand(1, -1, -1, -1))
-            loss = F.mse_loss(pred_residual, residual_true)
+            # --- Apply augmentations ---
+            cond_aug, hr_aug, base_aug = augment_panorama(
+                item['cond'].clone(), item['hr'].clone(), item['base'].clone(),
+                {k: v.clone() for k, v in item['ms_isht'].items()},
+                training=True)
 
+            residual_true = hr_aug - base_aug
+            ms_isht_in = None if ms_isht_none else item['ms_isht']
+            pred_residual = model(cond_aug, ms_isht_in)
+
+            # Loss = MSE(residual) + L2 regularization
+            mse_loss = F.mse_loss(pred_residual, residual_true)
+            l2_reg = pred_residual.pow(2).mean()
+            loss = mse_loss + RESIDUAL_L2_WEIGHT * l2_reg
+
+            # PolarMoE load balance loss
             if bal_weight > 0 and cfg["use_polar_moe"]:
                 bal_loss = model.load_balance_loss()
-                epoch_bal += bal_loss
+                epoch_bal += float(bal_loss)
                 loss = loss + bal_weight * bal_loss
 
             optimizer.zero_grad()
@@ -347,26 +450,32 @@ def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
 
         epoch_loss /= len(train_data)
         if cfg["use_polar_moe"]:
-            epoch_bal /= max(1, len(train_data))
+            epoch_bal /= len(train_data)
         train_losses.append(epoch_loss)
-        balance_losses.append(epoch_bal)
         scheduler.step()
 
+        # Validation (no augmentation)
         if epoch == 1 or epoch % val_every == 0 or epoch == epochs:
-            val_m = validate(model, val_data, latent, ms_injection=cfg["ms_injection"])
-            val_epochs.append(epoch)
-            val_metrics.append(val_m)
+            val_m = validate(model, val_data, ms_injection=cfg["ms_injection"])
+            val_epochs.append(global_epoch)
+            val_metrics_list.append(val_m)
 
+            # Save best model (early stopping)
+            if val_m['mse'] < best_val_mse:
+                best_val_mse = val_m['mse']
+                best_epoch = global_epoch
+                torch.save(model.state_dict(), os.path.join(exp_dir, "best_model.pt"))
+
+            # Save sample prediction
             model.eval()
             with torch.no_grad():
                 ms_isht_infer = None if ms_isht_none else val_data[0]['ms_isht']
-                val_pred_residual = model(val_data[0]['cond'], ms_isht_infer,
-                                          latent=latent.expand(1, -1, -1, -1))
-                val_sr = val_data[0]['base'] + val_pred_residual
+                val_pred = model(val_data[0]['cond'], ms_isht_infer)
+                val_sr = val_data[0]['base'] + val_pred
             model.train()
-            to_pil(val_sr).save(os.path.join(exp_dir, f"e{epoch:04d}.png"))
+            to_pil(val_sr).save(os.path.join(exp_dir, f"e{global_epoch:04d}.png"))
 
-            val_mses = [m["mse"] for m in val_metrics]
+            val_mses = [m["mse"] for m in val_metrics_list]
             update_curves(exp_name, train_losses, val_epochs, val_mses,
                           log_dir=os.path.join(OUTPUT_DIR, "logs"))
             make_progression(exp_dir)
@@ -376,6 +485,7 @@ def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
                 val_mse=f"{val_m['mse']:.6f}",
                 val_psnr=f"{val_m['psnr']:.1f}",
                 val_ssim=f"{val_m['ssim']:.4f}",
+                best_ep=str(best_epoch),
             )
         else:
             postfix = {"train": f"{epoch_loss:.6f}"}
@@ -384,38 +494,40 @@ def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
             pbar.set_postfix(postfix)
 
     # Final summary
-    best_idx = min(range(len(val_metrics)), key=lambda i: val_metrics[i]["mse"])
-    best = val_metrics[best_idx]
-
     print(f"\n{'='*60}")
     print(f"Experiment {exp_name} Results ({cfg['desc']}):")
     print(f"  Final train loss: {train_losses[-1]:.6f}")
-    for ep, m in zip(val_epochs, val_metrics):
-        marker = " <-- BEST" if ep == val_epochs[best_idx] else ""
-        delta_psnr = ""
-        if baseline_psnr is not None:
-            delta_psnr = f"  ΔPSNR={m['psnr']-baseline_psnr:+.1f}dB"
+    print(f"  Bicubic val: MSE={bicubic_metrics['mse']:.6f}, PSNR={bicubic_metrics['psnr']:.2f}dB, "
+          f"SSIM={bicubic_metrics['ssim']:.4f}")
+    for ep, m in zip(val_epochs, val_metrics_list):
+        marker = " <-- BEST" if ep == best_epoch else ""
+        delta_psnr = f"  ΔPSNR={m['psnr']-BASELINE_PSNR:+.1f}dB" if BASELINE_PSNR else ""
         print(f"  Epoch {ep:4d}: MSE={m['mse']:.6f}  PSNR={m['psnr']:.2f}  "
               f"SSIM={m['ssim']:.4f}  NCC={m['ncc']:.4f}  ENCC={m['edge_ncc']:.4f}"
               f"{delta_psnr}{marker}")
 
-    print(f"\n  Best: epoch {val_epochs[best_idx]}, "
-          f"MSE={best['mse']:.6f}, PSNR={best['psnr']:.2f}dB, "
-          f"SSIM={best['ssim']:.4f}, NCC={best['ncc']:.4f}, ENCC={best['edge_ncc']:.4f}")
+    # Load best model for final metrics
+    model.load_state_dict(torch.load(os.path.join(exp_dir, "best_model.pt")))
+    best_metrics = validate(model, val_data, ms_injection=cfg["ms_injection"])
 
-    if baseline_psnr is not None:
-        delta_psnr = best['psnr'] - baseline_psnr
-        delta_ssim = best['ssim'] - baseline_ssim
-        print(f"  vs Baseline (Stage 1): ΔPSNR={delta_psnr:+.1f}dB, ΔSSIM={delta_ssim:+.4f}")
-        if delta_psnr > 0.1:
-            print(f"  PSNR improved >0.1dB -> KEEP this module")
-        elif delta_psnr > -0.1:
-            print(f"  PSNR within ±0.1dB -> marginal, consider compute cost")
-        else:
-            print(f"  PSNR degraded >0.1dB -> DISCARD")
+    print(f"\n  Best checkpoints saved to {os.path.join(exp_dir, 'best_model.pt')}")
+    print(f"\n  Best: epoch {best_epoch}, "
+          f"MSE={best_metrics['mse']:.6f}, PSNR={best_metrics['psnr']:.2f}dB, "
+          f"SSIM={best_metrics['ssim']:.4f}, NCC={best_metrics['ncc']:.4f}, "
+          f"ENCC={best_metrics['edge_ncc']:.4f}")
+
+    delta_psnr = best_metrics['psnr'] - BASELINE_PSNR
+    delta_ssim = best_metrics['ssim'] - BASELINE_SSIM
+    print(f"  vs Baseline (Stage 1 v2): ΔPSNR={delta_psnr:+.1f}dB, ΔSSIM={delta_ssim:+.4f}")
+    if delta_psnr > 0.1:
+        print(f"  PSNR improved >0.1dB -> KEEP this module")
+    elif delta_psnr > -0.1:
+        print(f"  PSNR within ±0.1dB -> marginal, consider compute cost")
+    else:
+        print(f"  PSNR degraded >0.1dB -> DISCARD")
     print(f"{'='*60}")
 
-    return best
+    return best_metrics
 
 
 # ============================================================
@@ -423,14 +535,32 @@ def run_experiment(exp_key, gpu, epochs=TRAIN_EPOCHS,
 # ============================================================
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Phase 6 Stage 2: Module re-validation")
+    parser = argparse.ArgumentParser(description="Phase 6 Stage 2: Module re-validation (v2 recipe)")
     parser.add_argument("--exp", "-e", type=str, required=True,
                         choices=list(MODULE_CONFIGS.keys()),
                         help="Experiment: 2.1=MS_ISHT, 2.2=PolarMoE, 2.3=CoordEmbed, "
                              "2.4=CircularConv, 2.5=SphericalAttention")
     parser.add_argument("--gpu", "-g", type=int, default=7)
     parser.add_argument("--epochs", type=int, default=TRAIN_EPOCHS)
+    parser.add_argument("--resume", action="store_true",
+                        help="Resume from best_model.pt checkpoint")
+    parser.add_argument("--start-epoch", type=int, default=0,
+                        help="Epoch offset for resumed training (e.g., 400)")
     args = parser.parse_args()
 
     os.makedirs(os.path.join(OUTPUT_DIR, "logs"), exist_ok=True)
-    run_experiment(args.exp, gpu=args.gpu, epochs=args.epochs)
+
+    resume_ckpt = None
+    start_epoch = 0
+    if args.resume:
+        cfg = MODULE_CONFIGS[args.exp]
+        ckpt_path = os.path.join(OUTPUT_DIR, cfg["name"], "best_model.pt")
+        if os.path.exists(ckpt_path):
+            resume_ckpt = ckpt_path
+            start_epoch = args.start_epoch or 400
+        else:
+            print(f"Checkpoint not found: {ckpt_path}")
+            exit(1)
+
+    run_experiment(args.exp, gpu=args.gpu, epochs=args.epochs,
+                   resume_ckpt=resume_ckpt, start_epoch=start_epoch)

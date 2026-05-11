@@ -1,0 +1,40 @@
+# Phase 12 Stage 1.5b: Phase-aligned augmentation
+# Horizontal roll + phase-aligned crop (grid=8 for X4) + color jitter + HR noise
+# Crop uses nearest-neighbor resize to preserve DWT grid alignment.
+# LR=2e-4 to escape the "bicubic trap" local optimum.
+
+experiment:
+  name: phase12_stage1_aligned
+  phase: phase12
+  stage: stage1.5b
+  desc: "Wavelet Flow 16-image phase-aligned augment + lr=2e-4"
+  trainer: wavelet_flow
+
+model:
+  type: wavelet_flow
+  base_ch: 64
+  n_blocks: 8
+  time_dim: 256
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 16
+  n_val: 4
+
+training:
+  lr: 2.0e-4
+  epochs: 400
+  l1_weight: 0.1
+  infer_steps: 4
+  augmentation:
+    roll_prob: 0.5
+    crop_prob: 0.9
+    color_prob: 0.7
+    noise_std: 0.005
+    noise_prob: 0.3
+
+output:
+  dir: phase12_output
+  log_dir: phase12_output/logs

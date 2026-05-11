@@ -1,0 +1,38 @@
+# Phase 9 Stage 0: FocusRefine single-image overfitting (sanity check)
+# Experiment A: Quick feasibility verification — realsr_v3 dataset
+experiment:
+  name: phase9_stage0_v2
+  phase: phase9
+  stage: stage0
+  desc: "FocusRefine 50-train + 2 val — 512×1024 crops, 5-step, TF noise=0.02, lr=5e-5"
+  trainer: focus_refine
+
+model:
+  type: focus_refine
+  in_ch: 4
+  base_ch: 64
+  out_ch: 3
+  time_dim: 128
+  use_spatial_bias: true
+  use_time_embedding: true
+
+data:
+  hr_size: [512, 1024]      # H, W
+  scale: 2                   # LR = HR / 2
+  data_dir: datasets/realsr_v3/Canon/Train/2
+  n_train: 50
+  n_val: 2
+  crops_per_image: 3
+
+training:
+  mode: iterative
+  lr: 5.0e-5
+  epochs: 500
+  num_steps: 5
+  center_regions: [[512, 1024], [384, 768], [256, 512], [128, 256], [64, 128]]
+  use_residual: true
+  teacher_noise_std: 0.02
+
+output:
+  dir: phase9_output
+  log_dir: phase9_output/logs

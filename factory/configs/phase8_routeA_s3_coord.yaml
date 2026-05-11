@@ -1,0 +1,41 @@
+# Phase 8 Route A Scheme 3: Learnable Coordinate Embedding
+# Adds a learnable 2D position encoding at the bottleneck, allowing the model
+# to learn different enhancement strategies for different spatial locations.
+# Lightest-weight variant: ~50k extra parameters.
+experiment:
+  name: phase8_routeA_s3_coord
+  phase: phase8
+  stage: routeA_s3
+  desc: "Route A variant 3 — learnable coordinate embedding at bottleneck"
+  trainer: multiscale
+
+model:
+  type: multiscale_coord
+  in_ch: 3
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  use_residual: true
+  aux_weights:
+    dec3: 0.3
+    dec2: 0.15
+    dec1: 0.05
+  center_crop_ratios:
+    dec3: 0.5
+    dec2: 0.6
+    dec1: 0.8
+
+output:
+  dir: phase8_output
+  log_dir: phase8_output/logs

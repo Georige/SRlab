@@ -1,0 +1,43 @@
+# Phase 12 Stage 1.12: Direct Wavelet Regression
+# Removes time, flow matching, and Euler integration entirely.
+# Model directly predicts H_hr from LL_lr + cond_feat in one forward pass.
+#
+# Data Flow:
+#   LR → bicubic↑ → lr_up → DWT → LL_lr, H_lr
+#   HR → DWT → LL_hr, H_hr
+#   Training: H_pred = model(LL_lr, lr_up), loss = MSE(H_pred, H_hr) + 0.1*L1
+#   Inference: SR = IDWT(LL_lr, H_pred)
+
+experiment:
+  name: phase12_stage1.12_direct
+  phase: phase12
+  stage: stage1.12
+  desc: "Direct wavelet regression — no time/no flow/no Euler, single forward pass"
+  trainer: wavelet_direct
+
+model:
+  type: wavelet_direct
+  base_ch: 64
+  n_blocks: 8
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 16
+  n_val: 4
+
+training:
+  lr: 2.0e-4
+  epochs: 400
+  l1_weight: 0.1
+  augmentation:
+    roll_prob: 0.5
+    crop_prob: 0.9
+    color_prob: 0.7
+    noise_std: 0.005
+    noise_prob: 0.3
+
+output:
+  dir: phase12_output
+  log_dir: phase12_output/logs

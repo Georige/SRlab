@@ -1,0 +1,40 @@
+# Phase 8 Route A Scheme 2: Multi-Scale Center Mask Injection (FiLM)
+# At each encoder level, a downsampled center mask is injected via FiLM.
+# The model learns per-resolution spatial conditioning.
+experiment:
+  name: phase8_routeA_s2_film
+  phase: phase8
+  stage: routeA_s2
+  desc: "Route A variant 2 — multi-scale FiLM center mask injection at every resolution"
+  trainer: multiscale
+
+model:
+  type: multiscale_film
+  in_ch: 3
+  out_ch: 3
+  base_ch: 64
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/odisr/training
+  n_train: 1
+  n_val: 1
+  image_index: 0
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  use_residual: true
+  aux_weights:
+    dec3: 0.3
+    dec2: 0.15
+    dec1: 0.05
+  center_crop_ratios:
+    dec3: 0.5
+    dec2: 0.6
+    dec1: 0.8
+
+output:
+  dir: phase8_output
+  log_dir: phase8_output/logs

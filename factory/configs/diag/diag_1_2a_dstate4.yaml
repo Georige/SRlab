@@ -1,0 +1,41 @@
+experiment:
+  name: diag_1_2a_dstate4
+  phase: phase10_diag
+  stage: dstate4
+  desc: d_state=4 ablation
+  trainer: refinement
+model:
+  type: ssm_focus
+  in_ch: 7
+  out_ch: 3
+  base_ch: 32
+  time_dim: 128
+  d_state: 4
+  d_conv: 4
+  expand: 1
+  use_fixed_delta: false
+  scan_mode: bidirectional
+  use_mask: true
+data:
+  hr_size:
+  - 480
+  - 832
+  scale: 2
+  data_dir: lau_dataset/realsr_canon
+  n_train: 2
+  n_val: 1
+  image_index: 0
+training:
+  lr: 5.0e-05
+  epochs: 200
+  n_scales: 6
+  use_residual: true
+  teacher_noise_base: 0.02
+  teacher_noise_scale: 0.0
+  time_dropout: 0.0
+  augmentation: false
+  random_mask_shift: 0.0
+  warmup_epochs: 0
+output:
+  dir: phase10_diag_output/exp1_2a_dstate4
+  log_dir: phase10_diag_output/exp1_2a_dstate4/logs

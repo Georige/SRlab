@@ -1,0 +1,58 @@
+# Phase 7 Stage 3: LoRA + L1 + VGG + GAN (full composite loss)
+#
+# Resume from Stage 2 best_model.pt, add PatchGAN adversarial loss (weight=0.01).
+# Lower LR_G to 1e-4 for stability.
+# Purpose: GAN gradient drives texture generation from nothing.
+# ~300 epochs.
+experiment:
+  name: s7.3_l1_vgg_gan
+  phase: phase7
+  stage: stage3
+  desc: "LoRA(r=4) + L1 + VGG(λ=0.05) + GAN(λ=0.01)"
+  trainer: gan
+
+model:
+  type: direct_unet
+  cond_ch: 6
+  base_ch: 64
+  latent_ch: 0
+  use_polar_moe: false
+  use_circular_conv: false
+  use_coord_embed: false
+  use_spherical_attn: false
+  ms_injection: add
+  out_ch: 3
+
+data:
+  hr_size: [512, 1024]
+  scale: 4
+  data_dir: lau_dataset/sun_test
+  n_train: 16
+  n_val: 4
+  l_cond: 255
+  ms_cond: [[128, 2], [64, 4], [32, 8]]
+
+training:
+  lr_g: 1.0e-4
+  lr_d: 2.0e-4
+  epochs: 300
+  lora_r: 4
+  lora_alpha: 1.0
+  l1_weight: 1.0
+  vgg_weight: 0.05
+  gan_weight: 0.01
+  tv_weight: 1.0e-6
+  gan_type: lsgan
+  betas_g: [0.5, 0.999]
+  betas_d: [0.5, 0.999]
+  base_ckpt: phase6_output/s7.2_l1_vgg/best_model.pt
+  augmentation:
+    roll_prob: 0.5
+    crop_prob: 0.9
+    color_prob: 0.7
+    noise_std: 0.005
+    noise_prob: 0.3
+
+output:
+  dir: phase6_output
+  log_dir: phase6_output/logs
