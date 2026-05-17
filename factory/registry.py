@@ -233,6 +233,14 @@ def build_wavelet_direct(cfg, device):
     return model
 
 
+@register_model('mini_sr')
+def build_mini_sr(cfg, device):
+    from model.mini_sr import MiniSRNet
+    zero_init = cfg.model.get('zero_init', True)
+    model = MiniSRNet(zero_init=zero_init).to(device)
+    return model
+
+
 @register_model('morpho_sr')
 def build_morpho_sr(cfg, device):
     from model.morpho_sr import MorphoSR
@@ -287,3 +295,6 @@ def _register_builtin_trainers():
     if 'morpho' not in TRAINER_REGISTRY:
         from factory.trainer_morpho import MorphoTrainer
         TRAINER_REGISTRY['morpho'] = MorphoTrainer
+    if 'mini_sr' not in TRAINER_REGISTRY:
+        from factory.trainer_mini_sr import MiniSRTrainer
+        TRAINER_REGISTRY['mini_sr'] = MiniSRTrainer

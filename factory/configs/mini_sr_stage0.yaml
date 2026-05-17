@@ -1,0 +1,36 @@
+# MiniSR Stage 0: Single image sanity check
+experiment:
+  name: mini_sr_stage0
+  phase: mini_sr
+  stage: stage0
+  desc: "MiniSRNet single image overfit — wavelet loss + zero-init"
+  trainer: mini_sr
+
+model:
+  type: mini_sr
+  zero_init: true
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/sun_test
+  n_train: 1
+  n_val: 1
+
+training:
+  lr: 1.0e-4
+  epochs: 200
+  patch_size: 512
+  patch_stride: 256
+  # loss: 'mse' | 'wavelet' | 'mse+wavelet'
+  loss: wavelet
+  wavelet_weights:
+    LL: 0.1
+    LH: 1.0
+    HL: 1.0
+    HH: 1.0
+  # mse_weight: 0.5  # only used when loss='mse+wavelet'
+
+output:
+  dir: mini_sr_output
+  log_dir: mini_sr_output/logs

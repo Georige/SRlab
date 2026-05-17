@@ -1,0 +1,38 @@
+# MiniSR Stage 1: Full-scale training with DDP
+experiment:
+  name: mini_sr_stage1
+  phase: mini_sr
+  stage: stage1
+  desc: "MiniSRNet DDP — 80 train + 20 val, wavelet loss, 1000 epochs"
+  trainer: mini_sr
+
+model:
+  type: mini_sr
+  zero_init: true
+
+data:
+  hr_size: [1024, 2048]
+  scale: 2
+  data_dir: lau_dataset/sun_test
+  n_train: 80
+  n_val: 20
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  patch_size: 512
+  patch_stride: 256
+  patches_per_image: 4
+  patch_batch: 2
+  loss: wavelet
+  input_noise_std: 0.02
+  aug_roll: 0.5
+  wavelet_weights:
+    LL: 0.1
+    LH: 1.0
+    HL: 1.0
+    HH: 1.0
+
+output:
+  dir: mini_sr_output
+  log_dir: mini_sr_output/logs

@@ -9,10 +9,26 @@ import numpy as np
 from PIL import Image
 
 
-def update_curves(exp_name, losses, sample_epochs, sample_mses, log_dir="logs"):
-    """Generate loss + v_img curves for overfit experiment."""
+def update_curves(exp_name, losses, sample_epochs, sample_mses, log_dir="logs",
+                  val_psnrs=None, val_ssims=None):
+    """Generate loss + metrics curves for overfit experiment.
+
+    When val_psnrs and val_ssims are provided, uses a 2x2 grid:
+      - top-left: train loss (log scale)
+      - top-right: val MSE
+      - bottom-left: val PSNR
+      - bottom-right: val SSIM
+    Otherwise falls back to the original 2-panel layout.
+    """
     os.makedirs(log_dir, exist_ok=True)
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
+
+    has_extra = val_psnrs is not None and val_ssims is not None
+
+    if has_extra:
+        fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+        (ax1, ax2), (ax3, ax4) = axes
+    else:
+        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
     ax1.plot(losses, lw=0.5, alpha=0.8)
     ax1.set_xlabel("Epoch"); ax1.set_ylabel("Train Loss")
@@ -21,10 +37,22 @@ def update_curves(exp_name, losses, sample_epochs, sample_mses, log_dir="logs"):
     ax1.grid(True, alpha=0.3)
 
     if sample_epochs:
-        ax2.plot(sample_epochs, sample_mses, 'o-', markersize=4, lw=1)
+        ax2.plot(sample_epochs, sample_mses, 'o-', markersize=4, lw=1, color='#e74c3c')
         ax2.set_xlabel("Epoch"); ax2.set_ylabel("MSE vs HR")
-        ax2.set_title(f"{exp_name} — v_img at checkpoints")
+        ax2.set_title(f"{exp_name} — Val MSE")
         ax2.grid(True, alpha=0.3)
+
+        if has_extra:
+            ax3.plot(sample_epochs, val_psnrs, 'o-', markersize=4, lw=1, color='#2ecc71')
+            ax3.set_xlabel("Epoch"); ax3.set_ylabel("PSNR (dB)")
+            ax3.set_title(f"{exp_name} — Val PSNR")
+            ax3.grid(True, alpha=0.3)
+
+            ax4.plot(sample_epochs, val_ssims, 'o-', markersize=4, lw=1, color='#3498db')
+            ax4.set_xlabel("Epoch"); ax4.set_ylabel("SSIM")
+            ax4.set_title(f"{exp_name} — Val SSIM")
+            ax4.grid(True, alpha=0.3)
+            ax4.set_ylim(0, 1)
 
     plt.tight_layout()
     path = os.path.join(log_dir, f"overfit_{exp_name}_curves.png")
