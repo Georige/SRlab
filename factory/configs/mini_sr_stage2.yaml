@@ -1,0 +1,43 @@
+# MiniSR Stage 2: RealSR v3 paired data, real LR + random crop
+experiment:
+  name: mini_sr_stage2
+  phase: mini_sr
+  stage: stage2
+  desc: "MiniSRNet — RealSR v3 (Canon+Nikon), 406 train + 100 val pairs, real LR, wavelet loss"
+  trainer: mini_sr
+
+model:
+  type: mini_sr
+  zero_init: true
+
+data:
+  mode: paired_real
+  train_dirs:
+    - datasets/realsr_v3/Canon/Train/2
+    - datasets/realsr_v3/Nikon/Train/2
+  val_dirs:
+    - datasets/realsr_v3/Canon/Test/2
+    - datasets/realsr_v3/Nikon/Test/2
+  hr_suffix: _HR.png
+  lr_suffix: _LR2.png
+  n_val: 20
+
+training:
+  lr: 1.0e-4
+  epochs: 1000
+  patch_size: 512
+  patch_stride: 256
+  patches_per_image: 4
+  patch_batch: 2
+  crop_size: 800
+  loss: wavelet
+  input_noise_std: 0.02
+  wavelet_weights:
+    LL: 0.1
+    LH: 1.0
+    HL: 1.0
+    HH: 1.0
+
+output:
+  dir: mini_sr_output
+  log_dir: mini_sr_output/logs

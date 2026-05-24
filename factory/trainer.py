@@ -16,69 +16,13 @@ from factory.augment import augment_panorama
 from factory.config import DotDict
 from factory.registry import MODEL_REGISTRY
 from utility.data import PanoramaDataset
+from utility.metrics import compute_metrics
 from vit.overfit_plot import update_curves, make_progression
 
 
 def to_pil(t):
     a = t[0].cpu().permute(1, 2, 0).numpy()
     return Image.fromarray(np.clip((a + 1) * 127.5, 0, 255).astype(np.uint8))
-
-
-# ============================================================
-# Metrics
-# ============================================================
-
-@torch.no_grad()
-def compute_metrics(pred, target):
-    pred_f = pred.float()
-    target_f = target.float()
-    mse = F.mse_loss(pred_f, target_f).item()
-
-    ncc_vals = []
-    for c in range(3):
-        a = pred_f[:, c]; b = target_f[:, c]
-        a_m, b_m = a.mean(), b.mean()
-        a_s, b_s = a.std(), b.std()
-        if a_s < 1e-8 or b_s < 1e-8:
-            ncc_vals.append(0.0)
-        else:
-            ncc_vals.append(((a - a_m) * (b - b_m)).mean().item() / (a_s * b_s).item())
-    ncc = float(np.mean(ncc_vals))
-
-    edge_ncc_vals = []
-    sobel_x = torch.tensor([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]],
-                           dtype=torch.float32, device=pred.device).view(1, 1, 3, 3)
-    sobel_y = torch.tensor([[-1, -2, -1], [0, 0, 0], [1, 2, 1]],
-                           dtype=torch.float32, device=pred.device).view(1, 1, 3, 3)
-    for c in range(3):
-        a = pred_f[0:1, c:c+1]; b = target_f[0:1, c:c+1]
-        ga = torch.sqrt(F.conv2d(a, sobel_x, padding=1)**2 + F.conv2d(a, sobel_y, padding=1)**2).view(-1)
-        gb = torch.sqrt(F.conv2d(b, sobel_x, padding=1)**2 + F.conv2d(b, sobel_y, padding=1)**2).view(-1)
-        a_m, b_m = ga.mean(), gb.mean()
-        a_s, b_s = ga.std(), gb.std()
-        if a_s < 1e-8 or b_s < 1e-8:
-            edge_ncc_vals.append(0.0)
-        else:
-            edge_ncc_vals.append(((ga - a_m) * (gb - b_m)).mean().item() / (a_s * b_s).item())
-    edge_ncc = float(np.mean(edge_ncc_vals))
-
-    psnr = 20 * np.log10(2.0 / np.sqrt(mse)) if mse > 0 else 100.0
-
-    ssim_vals = []
-    for c in range(3):
-        a = pred_f[0:1, c:c+1]; b = target_f[0:1, c:c+1]
-        mu_a = F.avg_pool2d(a, 11, stride=1, padding=5)
-        mu_b = F.avg_pool2d(b, 11, stride=1, padding=5)
-        sigma_a = F.avg_pool2d((a - mu_a)**2, 11, stride=1, padding=5).sqrt()
-        sigma_b = F.avg_pool2d((b - mu_b)**2, 11, stride=1, padding=5).sqrt()
-        sigma_ab = F.avg_pool2d((a - mu_a) * (b - mu_b), 11, stride=1, padding=5)
-        C1, C2 = 0.01**2, 0.03**2
-        ssim_map = ((2*mu_a*mu_b + C1) * (2*sigma_ab + C2)) / \
-                   ((mu_a**2 + mu_b**2 + C1) * (sigma_a**2 + sigma_b**2 + C2) + 1e-8)
-        ssim_vals.append(ssim_map.mean().item())
-    ssim = float(np.mean(ssim_vals))
-
-    return {"mse": mse, "ncc": ncc, "edge_ncc": edge_ncc, "psnr": psnr, "ssim": ssim}
 
 
 # ============================================================

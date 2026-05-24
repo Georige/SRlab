@@ -40,6 +40,18 @@ DISTS（深度图像结构与纹理相似度）
 
 # 下一步改进
 1. 在训练的时候，给输入的图片添加轻微高斯噪声，让模型学习轻微去噪的能力，获得部分的生成能力
-2. 使用 transformer 架构来做高频恢复问题
-3. 编码器-解码器架构?
-4. 添加像素缺失的数据增强任务，让图片学一下补全的任务
+> 已实现, 并没有涌现出生成能力，模型还是在记忆图片
+2. 增加更多数据让模型学习更多特征
+3. 使用 transformer 架构来做高频恢复问题
+4. 编码器-解码器架构?
+5. 添加像素缺失的数据增强任务，让图片学一下补全的任务
+6. 蒸馏 diffusion 的生成模型，使其学会更复杂更锐利的纹理
+
+全面指标检测，不追求PSRN等保真指标，而是关注模型的感知质量
+Evaluation Metrics. We employ a range of widely used reference and non-
+reference metrics to conduct a comprehensive quantitative evaluation of ISR
+methods. In reference-based metrics, PSNR and SSIM [65] (calculated on the Y
+channel in YCbCr space) are fidelity metrics, while LPIPS [78], DISTS [11] are
+quality evaluation metrics. FID [22] calculates the distance between the distri-
+butions of generated images and reference images. MANIQA [68], MUSIQ [31],
+and CLIPIQA [60] are non-reference image quality assessment (IQA) metrics.

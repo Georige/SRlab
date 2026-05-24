@@ -13,6 +13,7 @@ from glob import glob
 
 from factory.registry import MODEL_REGISTRY
 from model.dwt_utils import dwt_haar
+from utility.metrics import compute_metrics
 from vit.overfit_plot import update_curves, make_progression
 
 
@@ -59,29 +60,6 @@ def stitch_patches(patches, positions, H, W, blend_weight):
 # ============================================================
 # Metrics
 # ============================================================
-
-@torch.no_grad()
-def compute_metrics(pred, target):
-    pred_f = pred.float()
-    target_f = target.float()
-    mse = F.mse_loss(pred_f, target_f).item()
-    psnr = 20 * np.log10(2.0 / np.sqrt(mse)) if mse > 0 else 100.0
-
-    ssim_vals = []
-    for c in range(3):
-        a = pred_f[0:1, c:c + 1]; b = target_f[0:1, c:c + 1]
-        mu_a = F.avg_pool2d(a, 11, stride=1, padding=5)
-        mu_b = F.avg_pool2d(b, 11, stride=1, padding=5)
-        sigma_a = F.avg_pool2d((a - mu_a) ** 2, 11, stride=1, padding=5).sqrt()
-        sigma_b = F.avg_pool2d((b - mu_b) ** 2, 11, stride=1, padding=5).sqrt()
-        sigma_ab = F.avg_pool2d((a - mu_a) * (b - mu_b), 11, stride=1, padding=5)
-        C1, C2 = 0.01 ** 2, 0.03 ** 2
-        ssim_map = ((2 * mu_a * mu_b + C1) * (2 * sigma_ab + C2)) / \
-                   ((mu_a ** 2 + mu_b ** 2 + C1) * (sigma_a ** 2 + sigma_b ** 2 + C2) + 1e-8)
-        ssim_vals.append(ssim_map.mean().item())
-    ssim = float(np.mean(ssim_vals))
-    return {"mse": mse, "psnr": psnr, "ssim": ssim}
-
 
 # ============================================================
 # Wavelet loss
@@ -150,12 +128,15 @@ class MiniSRTrainer:
         self.input_noise_std = cfg.training.get('input_noise_std', 0.0)
         self.aug_roll = cfg.training.get('aug_roll', 0.0)
 
+        self.data_mode = cfg.data.get('mode', 'bicubic')
+        self.crop_size = cfg.training.get('crop_size', None)
+
         self.patches_per_image = cfg.training.get('patches_per_image', None)
         self.patch_batch = cfg.training.get('patch_batch', 2)
 
         self.raw_model = None   # underlying model (no DDP wrap)
         self.model = None       # DDP-wrapped model (for forward)
-        self.train_paths = []
+        self.train_pairs = []   # (hr_path, lr_path_or_None) tuples
         self.val_paths = []
 
     def _log(self, msg):
@@ -167,6 +148,73 @@ class MiniSRTrainer:
     # ----------------------------------------------------------
 
     def _load_data(self):
+        if self.data_mode == 'paired_real':
+            self._load_data_paired()
+        else:
+            self._load_data_bicubic()
+
+    def _load_data_paired(self):
+        hr_suffix = self.cfg.data.get('hr_suffix', '_HR.png')
+        lr_suffix = self.cfg.data.get('lr_suffix', '_LR2.png')
+        train_dirs = [str(d) for d in self.cfg.data.train_dirs]
+        val_dirs = [str(d) for d in self.cfg.data.val_dirs]
+
+        all_train_pairs = []
+        for d in train_dirs:
+            hr_files = sorted(glob(os.path.join(d, f'*{hr_suffix}')))
+            for hr_path in hr_files:
+                base = hr_path.rsplit(hr_suffix, 1)[0]
+                lr_path = base + lr_suffix
+                if os.path.exists(lr_path):
+                    all_train_pairs.append((hr_path, lr_path))
+
+        if not all_train_pairs:
+            raise FileNotFoundError(f"No HR/LR pairs found in {train_dirs}")
+
+        # Shuffle to mix camera models across DDP ranks (use fixed seed so all ranks get same order)
+        rng_state = np.random.get_state()
+        np.random.seed(42)
+        np.random.shuffle(all_train_pairs)
+        np.random.set_state(rng_state)
+
+        # Trim to multiple of world_size so every rank has identical forward/backward count
+        if self.ddp_world_size > 1:
+            per_rank = len(all_train_pairs) // self.ddp_world_size
+            all_train_pairs = all_train_pairs[:per_rank * self.ddp_world_size]
+            start = self.ddp_rank * per_rank
+            end = start + per_rank if self.ddp_rank < self.ddp_world_size - 1 else len(all_train_pairs)
+            self.train_pairs = all_train_pairs[start:end]
+            self._log(f"[Rank {self.ddp_rank}] train shard: {len(self.train_pairs)} pairs (indices {start}:{end})")
+        else:
+            self.train_pairs = all_train_pairs
+
+        # Build val pairs
+        val_pairs = []
+        for d in val_dirs:
+            hr_files = sorted(glob(os.path.join(d, f'*{hr_suffix}')))
+            for hr_path in hr_files:
+                base = hr_path.rsplit(hr_suffix, 1)[0]
+                lr_path = base + lr_suffix
+                if os.path.exists(lr_path):
+                    val_pairs.append((hr_path, lr_path))
+
+        # Pre-load val images at native resolution (limit to n_val if set for speed)
+        self.val_hr, self.val_lr_up = [], []
+        n_val = self.cfg.data.get('n_val', len(val_pairs))
+        val_pairs = val_pairs[:n_val]
+        for hr_path, lr_path in val_pairs:
+            hr = load_image(hr_path)
+            lr_img = load_image(lr_path)
+            lr_up = F.interpolate(lr_img.unsqueeze(0), size=(hr.shape[1], hr.shape[2]),
+                                  mode='bicubic', align_corners=False).squeeze(0)
+            self.val_hr.append(hr)
+            self.val_lr_up.append(lr_up)
+
+        self._log(f"Loaded {len(self.train_pairs)} train + {len(val_pairs)} val pairs "
+                  f"(mode=paired_real, crop={self.crop_size}, "
+                  f"patch={self.patch_size}, stride={self.patch_stride})")
+
+    def _load_data_bicubic(self):
         data_dir = self.cfg.data.data_dir
         hr_size = tuple(self.cfg.data.hr_size)
 
@@ -183,15 +231,16 @@ class MiniSRTrainer:
         train_all = all_files[:n_train]
         self.val_paths = all_files[n_train:n_train + n_val]
 
-        # Shard training data across DDP ranks
+        # Trim to multiple of world_size so every rank has identical forward/backward count
         if self.ddp_world_size > 1:
             per_rank = len(train_all) // self.ddp_world_size
+            train_all = train_all[:per_rank * self.ddp_world_size]
             start = self.ddp_rank * per_rank
             end = start + per_rank if self.ddp_rank < self.ddp_world_size - 1 else len(train_all)
-            self.train_paths = train_all[start:end]
-            self._log(f"[Rank {self.ddp_rank}] train shard: {len(self.train_paths)} images (indices {start}:{end})")
+            self.train_pairs = [(p, None) for p in train_all[start:end]]
+            self._log(f"[Rank {self.ddp_rank}] train shard: {len(self.train_pairs)} images (indices {start}:{end})")
         else:
-            self.train_paths = train_all
+            self.train_pairs = [(p, None) for p in train_all]
 
         # Load val images into memory (all ranks)
         self.val_hr, self.val_lr_up = [], []
@@ -204,7 +253,7 @@ class MiniSRTrainer:
             self.val_hr.append(hr)
             self.val_lr_up.append(lr_up)
 
-        self._log(f"Loaded {len(self.train_paths)} train + {len(self.val_paths)} val images "
+        self._log(f"Loaded {len(self.train_pairs)} train + {len(self.val_paths)} val images "
                   f"(patch={self.patch_size}, stride={self.patch_stride})")
 
     # ----------------------------------------------------------
@@ -253,16 +302,36 @@ class MiniSRTrainer:
     # Image loading
     # ----------------------------------------------------------
 
-    def _load_image_pair(self, path):
-        hr_size = tuple(self.cfg.data.hr_size)
-        hr = load_image(path, hr_size)
-        lr = F.interpolate(hr.unsqueeze(0), scale_factor=0.5, mode='bicubic',
-                          align_corners=False).squeeze(0)
-        lr_up = F.interpolate(lr.unsqueeze(0), size=hr_size, mode='bicubic',
-                             align_corners=False).squeeze(0)
+    def _load_image_pair(self, pair):
+        hr_path, lr_path = pair
 
+        if lr_path is not None:
+            # Paired real LR: load both at native resolution
+            hr = load_image(hr_path)
+            lr_img = load_image(lr_path)
+            lr_up = F.interpolate(lr_img.unsqueeze(0), size=(hr.shape[1], hr.shape[2]),
+                                  mode='bicubic', align_corners=False).squeeze(0)
+        else:
+            # Bicubic mode: generate LR from HR
+            hr_size = tuple(self.cfg.data.hr_size)
+            hr = load_image(hr_path, hr_size)
+            lr = F.interpolate(hr.unsqueeze(0), scale_factor=0.5, mode='bicubic',
+                              align_corners=False).squeeze(0)
+            lr_up = F.interpolate(lr.unsqueeze(0), size=hr_size, mode='bicubic',
+                                 align_corners=False).squeeze(0)
+
+        # Random crop during training
+        if self.crop_size and hr.shape[1] >= self.crop_size and hr.shape[2] >= self.crop_size:
+            max_y = hr.shape[1] - self.crop_size
+            max_x = hr.shape[2] - self.crop_size
+            y0 = np.random.randint(0, max_y + 1)
+            x0 = np.random.randint(0, max_x + 1)
+            lr_up = lr_up[:, y0:y0 + self.crop_size, x0:x0 + self.crop_size]
+            hr = hr[:, y0:y0 + self.crop_size, x0:x0 + self.crop_size]
+
+        # Horizontal roll augmentation (panorama only)
         if self.aug_roll > 0 and np.random.random() < self.aug_roll:
-            shift = np.random.randint(0, hr_size[1])
+            shift = np.random.randint(0, hr.shape[2])
             lr_up = torch.roll(lr_up, shifts=shift, dims=-1)
             hr = torch.roll(hr, shifts=shift, dims=-1)
 
@@ -341,8 +410,10 @@ class MiniSRTrainer:
         self._log(f"Experiment: {self.exp_name}")
         self._log(f"Model: {self.cfg.model.type}  |  LR={lr} (cosine)  |  Epochs={epochs}")
         ppi = self.patches_per_image or 'all'
-        self._log(f"Loss: {self.loss_type}  |  Patch: {self.patch_size}x{self.patch_size}, "
-                  f"stride={self.patch_stride}, ppi={ppi}")
+        self._log(f"Data: {self.data_mode}  |  Loss: {self.loss_type}  |  "
+                  f"Patch: {self.patch_size}x{self.patch_size}, stride={self.patch_stride}, ppi={ppi}")
+        if self.crop_size:
+            self._log(f"Random crop: {self.crop_size}x{self.crop_size}")
         if self.input_noise_std > 0:
             self._log(f"Input noise: std={self.input_noise_std}")
         if self.aug_roll > 0:
@@ -359,8 +430,8 @@ class MiniSRTrainer:
             epoch_loss = 0.0
             n_steps = 0
 
-            for path in self.train_paths:
-                lr_up, hr = self._load_image_pair(path)
+            for pair in self.train_pairs:
+                lr_up, hr = self._load_image_pair(pair)
                 hr = hr.to(self.device)
 
                 lr_patches, _ = extract_patches(lr_up, self.patch_size, self.patch_stride)
@@ -389,41 +460,44 @@ class MiniSRTrainer:
             train_losses.append(epoch_loss)
             scheduler.step()
 
-            # Validation (main rank only)
-            if epoch == 1 or epoch % val_every == 0 or epoch == epochs:
-                if self.is_main:
-                    val_m = self._validate()
-                    val_epochs.append(global_epoch)
-                    val_metrics_list.append(val_m)
+            # Validation (main rank only) — skip epoch 1 to avoid warmup timeout
+            do_val = (epoch % val_every == 0 or epoch == epochs)
+            if self.ddp_world_size == 1:
+                do_val = do_val or epoch == 1
 
-                    if val_m['mse'] < best_val_mse:
-                        best_val_mse = val_m['mse']
-                        best_epoch = global_epoch
-                        torch.save(self._model_state_dict(),
-                                  os.path.join(self.output_dir, "best_model.pt"))
+            if do_val and self.is_main:
+                val_m = self._validate()
+                val_epochs.append(global_epoch)
+                val_metrics_list.append(val_m)
 
-                    self._save_sample(global_epoch)
+                if val_m['mse'] < best_val_mse:
+                    best_val_mse = val_m['mse']
+                    best_epoch = global_epoch
+                    torch.save(self._model_state_dict(),
+                              os.path.join(self.output_dir, "best_model.pt"))
 
-                    val_mses = [m["mse"] for m in val_metrics_list]
-                    val_psnrs = [m["psnr"] for m in val_metrics_list]
-                    val_ssims = [m["ssim"] for m in val_metrics_list]
-                    update_curves(self.exp_name, train_losses, val_epochs, val_mses,
-                                 log_dir=self.cfg.output.log_dir,
-                                 val_psnrs=val_psnrs, val_ssims=val_ssims)
-                    make_progression(self.output_dir)
+                self._save_sample(global_epoch)
 
-                    pbar.set_postfix(
-                        train=f"{epoch_loss:.6f}",
-                        val_mse=f"{val_m['mse']:.6f}",
-                        val_psnr=f"{val_m['psnr']:.1f}",
-                        val_ssim=f"{val_m['ssim']:.4f}",
-                        best_ep=str(best_epoch),
-                    )
+                val_mses = [m["mse"] for m in val_metrics_list]
+                val_psnrs = [m["psnr"] for m in val_metrics_list]
+                val_ssims = [m["ssim"] for m in val_metrics_list]
+                update_curves(self.exp_name, train_losses, val_epochs, val_mses,
+                             log_dir=self.cfg.output.log_dir,
+                             val_psnrs=val_psnrs, val_ssims=val_ssims)
+                make_progression(self.output_dir)
+
+                pbar.set_postfix(
+                    train=f"{epoch_loss:.6f}",
+                    val_mse=f"{val_m['mse']:.6f}",
+                    val_psnr=f"{val_m['psnr']:.1f}",
+                    val_ssim=f"{val_m['ssim']:.4f}",
+                    best_ep=str(best_epoch),
+                )
             else:
                 if self.is_main:
                     pbar.set_postfix({"train": f"{epoch_loss:.6f}"})
 
-            # Barrier: keep ranks in sync at validation boundaries
+            # Barrier: keep ranks in sync after validation
             if self.ddp_world_size > 1:
                 dist.barrier()
 
